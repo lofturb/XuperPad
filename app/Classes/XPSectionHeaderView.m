@@ -42,7 +42,7 @@
                           3.0f,
                           barHeight);
   [XPColorAccent() setFill];
-  [[XPRoundedPath(bar, 1.5f) fill];
+  [XPRoundedPath(bar, 1.5f) fill];
 
   NSString *title = self.sectionTitle ?: @"";
   NSDictionary *attributes = @{ NSFontAttributeName : XPFontMedium(12.5f),

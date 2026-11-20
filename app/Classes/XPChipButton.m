@@ -55,7 +55,7 @@
     XPDrawHorizontalGradient(context, area, XPColorAccent(), XPColorAccentAlt());
   } else {
     [[XPColorSurfaceAlt() colorWithAlphaComponent:0.85f] setFill];
-    [[XPRoundedPath(area, area.size.height / 2.0f) fill];
+    [XPRoundedPath(area, area.size.height / 2.0f) fill];
   }
 
   NSString *title = self.chipTitle;

@@ -22,7 +22,7 @@
                             side,
                             side);
   [[XPColorSurfaceAlt() colorWithAlphaComponent:0.9f] setFill];
-  [[XPRoundedPath(area, side / 2.0f) fill];
+  [XPRoundedPath(area, side / 2.0f) fill];
   [XPColorTextMuted() setStroke];
   CGFloat arm = side * 0.22f;
   CGFloat centerX = CGRectGetMidX(area);
@@ -113,7 +113,7 @@
     return;
   }
   [[XPColorSurface() colorWithAlphaComponent:0.95f] setFill];
-  [[XPRoundedPath(area, area.size.height / 2.0f) fill];
+  [XPRoundedPath(area, area.size.height / 2.0f) fill];
   [XPColorDivider() setStroke];
   UIBezierPath *border = XPRoundedPath(area, area.size.height / 2.0f);
   border.lineWidth = 1.0f;

@@ -75,7 +75,7 @@
                             badgeSide,
                             badgeSide);
   [[XPColorSurfaceAlt() colorWithAlphaComponent:0.95f] setFill];
-  [[XPRoundedPath(badge, badgeSide / 2.0f) fill];
+  [XPRoundedPath(badge, badgeSide / 2.0f) fill];
 
   NSString *number = self.episodeNumber ?: @"";
   NSDictionary *attributes = @{ NSFontAttributeName : XPFontCaption(11.0f),

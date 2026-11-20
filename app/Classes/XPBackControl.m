@@ -30,7 +30,7 @@
                             side,
                             side);
   [[XPColorSurfaceAlt() colorWithAlphaComponent:0.9f] setFill];
-  [[XPRoundedPath(area, side / 2.0f) fill];
+  [XPRoundedPath(area, side / 2.0f) fill];
 
   [XPColorTextPrimary() setStroke];
   UIBezierPath *chevron = [UIBezierPath bezierPath];
