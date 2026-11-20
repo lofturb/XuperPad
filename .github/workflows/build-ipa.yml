@@ -140,7 +140,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/vendor/ffmpeg
-          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10
+          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10-v2
 
       - name: Compilar FFmpeg para armv7
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'

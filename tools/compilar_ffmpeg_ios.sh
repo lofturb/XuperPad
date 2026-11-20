@@ -6,7 +6,8 @@ set -euo pipefail
 FFMPEG_TAG="${FFMPEG_TAG:-n4.4.4}"
 MBEDTLS_TAG="${MBEDTLS_TAG:-v2.28.10}"
 THEOS="${THEOS:-${GITHUB_WORKSPACE:-$PWD}/theos}"
-SDK="${SDK:-$THEOS/sdks/iPhoneOS9.3.sdk}"
+SDK9="${SDK9:-$THEOS/sdks/iPhoneOS9.3.sdk}"
+SDK10="${SDK10:-$THEOS/sdks/iPhoneOS10.3.sdk}"
 TOOLCHAIN="${TOOLCHAIN:-$THEOS/toolchain/linux/iphone}"
 OUT="${OUT:-app/vendor/ffmpeg}"
 WORK="${WORK:-${RUNNER_TEMP:-/tmp}/xuper-ffmpeg}"
@@ -33,25 +34,113 @@ pick_tool() {
 }
 
 CC="$(pick_tool clang)" || fail "No hay clang en $TOOLCHAIN/bin"
+CXX="$(pick_tool clang++)" || CXX=""
 AR="$(pick_tool ar)" || fail "No hay ar en $TOOLCHAIN/bin"
 NM="$(pick_tool nm)" || NM=""
 RANLIB="$(pick_tool ranlib)" || RANLIB=""
 STRIP="$(pick_tool strip)" || STRIP=""
 
-[ -d "$SDK/System/Library/Frameworks" ] || fail "SDK incompleto: $SDK"
-[ -f "$SDK/usr/lib/crt1.o" ] || fail "El SDK no trae usr/lib/crt1.o"
-[ -f "$SDK/usr/lib/libSystem.tbd" ] || fail "El SDK no trae usr/lib/libSystem.tbd"
-
 log "Toolchain: $CC"
-log "SDK: $SDK"
 log "FFmpeg: $FFMPEG_TAG, mbedTLS: $MBEDTLS_TAG"
 
-CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -O2 -fPIC"
-LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK -miphoneos-version-min=$MIN_IOS"
+mkdir -p "$WORK" "$OUT/lib" "$OUT/include"
+
+cat > "$WORK/probe.c" <<'EOF'
+#include <string.h>
+
+static volatile unsigned long TAMANO = 16;
+static volatile int OBJETIVO = 1;
+
+int main(void)
+{
+    static volatile char origen[32] = { 1, 2, 3, 4 };
+    char destino[32];
+    unsigned long n = TAMANO;
+    int objetivo = OBJETIVO;
+
+    memcpy(destino, (const void *)origen, n);
+    memmove(destino + 1, destino, n - 1);
+    if (memcmp(destino, (const void *)origen, n) != 0) {
+        return 1;
+    }
+    if (memchr(destino, objetivo, n) == NULL) {
+        return 2;
+    }
+    memset(destino, 0, n);
+    if (strcmp(destino, (const char *)origen) == 0) {
+        return 3;
+    }
+    if (strncmp(destino, (const char *)origen, n) == 0) {
+        return 4;
+    }
+    if (strchr(destino, objetivo) == NULL) {
+        return 5;
+    }
+    return 0;
+}
+EOF
+
+LINK_VARIANTS=(
+  ""
+  "-lSystem"
+  "-lobjc -framework Foundation -framework CoreFoundation"
+)
+
+SDK_USED=""
+LD_EXTRA_USED=""
+DRIVER_USED=""
+for SDK_CANDIDATE in "$SDK10" "$SDK9"; do
+  if [ ! -f "$SDK_CANDIDATE/usr/lib/crt1.o" ] || [ ! -f "$SDK_CANDIDATE/usr/lib/libSystem.tbd" ]; then
+    log "El SDK $(basename "$SDK_CANDIDATE") no tiene crt1.o o libSystem.tbd"
+    continue
+  fi
+  for DRIVER_CANDIDATE in "$CC" "$CXX"; do
+    [ -n "$DRIVER_CANDIDATE" ] || continue
+    for LD_EXTRA in "${LINK_VARIANTS[@]}"; do
+      log "Probando $DRIVER_CANDIDATE con $(basename "$SDK_CANDIDATE") y [$LD_EXTRA]"
+      if "$DRIVER_CANDIDATE" -target "$TARGET" -arch armv7 -isysroot "$SDK_CANDIDATE" \
+        -miphoneos-version-min="$MIN_IOS" $LD_EXTRA -Wl,-dynamic,-search_paths_first \
+        "$WORK/probe.c" -o "$WORK/probe" > "$WORK/probe.log" 2>&1; then
+        SDK_USED="$SDK_CANDIDATE"
+        LD_EXTRA_USED="$LD_EXTRA"
+        DRIVER_USED="$DRIVER_CANDIDATE"
+        break 3
+      fi
+      tail -n 6 "$WORK/probe.log" >&2 || true
+    done
+  done
+done
+
+[ -n "$SDK_USED" ] || fail "Ninguna variante de enlace resuelve la libc de armv7"
+
+log "Enlace valido con $DRIVER_USED, $(basename "$SDK_USED") y [$LD_EXTRA_USED]"
+
+if [ "$DRIVER_USED" != "$CC" ]; then
+  CLANG_BIN="$CC"
+  WRAPPER="$WORK/cc-wrap"
+  cat > "$WRAPPER" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = "-c" ]; then
+    exec "$CLANG_BIN" "\$@"
+  fi
+done
+exec "$DRIVER_USED" "\$@"
+EOF
+  chmod +x "$WRAPPER"
+  CC="$WRAPPER"
+  log "Se usa un envoltorio que compila con clang y enlaza con $DRIVER_USED"
+fi
+
+CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 -fPIC"
+LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS"
 CFLAGS_FFMPEG="$CFLAGS_TARGET -I$OUT/include"
 LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib"
 
-mkdir -p "$WORK" "$OUT/lib" "$OUT/include"
+SDK_VERSION="$(basename "$SDK_USED" .sdk)"
+SDK_VERSION="${SDK_VERSION#iPhoneOS}"
+printf 'XUPER_FFMPEG_SDK_VERSION := %s\n' "$SDK_VERSION" > "$OUT/ldconfig.mk"
+log "SDK elegido para enlazar: $SDK_VERSION"
 
 clone_tag() {
   local url="$1" tag="$2" dir="$3"
@@ -98,26 +187,6 @@ log "pkg-config detecta mbedTLS en $WORK/pkgconfig"
 PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
   pkg-config --cflags --libs mbedtls || fail "el archivo mbedtls.pc no es valido"
 
-cat > "$WORK/probe.c" <<'EOF'
-#include <string.h>
-
-int main(void)
-{
-    static volatile char origen[4] = { 1, 2, 3, 4 };
-    char destino[4];
-
-    memcpy(destino, (const void *)origen, sizeof(destino));
-    if (memcmp(destino, (const void *)origen, sizeof(destino)) != 0) {
-        return 1;
-    }
-    if (memchr(destino, 1, sizeof(destino)) == NULL) {
-        return 2;
-    }
-    memset(destino, 0, sizeof(destino));
-    return 0;
-}
-EOF
-
 cd "$WORK/ffmpeg"
 FF_ARGS=(
   --prefix="$OUT"
@@ -162,36 +231,14 @@ if [ -n "$STRIP" ]; then
   FF_ARGS+=(--strip="$STRIP")
 fi
 
-LD_CANDIDATES=(
-  ""
-  "-lSystem"
-  "-framework Foundation -framework CoreFoundation -lobjc"
-  "-Wl,-undefined,dynamic_lookup"
-)
-LD_FLAGS=""
-CONFIGURED=0
-for LD_EXTRA in "${LD_CANDIDATES[@]}"; do
-  if [ -z "$LD_EXTRA" ]; then
-    log "Probando el enlace sin banderas de sistema"
-  else
-    log "Probando el enlace con $LD_EXTRA"
-  fi
-  if ! "$CC" $CFLAGS_TARGET $LDFLAGS_TARGET $LD_EXTRA \
-    -Wl,-dynamic,-search_paths_first "$WORK/probe.c" -o "$WORK/probe" > "$WORK/probe.log" 2>&1; then
-    tail -n 12 "$WORK/probe.log" >&2 || true
-    continue
-  fi
-  log "El enlace funciona; configurando FFmpeg"
-  if PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
-    ./configure "${FF_ARGS[@]}" --extra-ldflags="$LDFLAGS_FFMPEG $LD_EXTRA"; then
-    LD_FLAGS="$LDFLAGS_FFMPEG $LD_EXTRA"
-    CONFIGURED=1
-    break
-  fi
+LD_FLAGS="$LDFLAGS_FFMPEG $LD_EXTRA_USED"
+log "Configurando FFmpeg con $LD_FLAGS"
+if ! PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
+  ./configure "${FF_ARGS[@]}" --extra-ldflags="$LD_FLAGS"; then
   log "Ultimas lineas de ffbuild/config.log"
-  tail -n 60 ffbuild/config.log >&2 || true
-done
-[ "$CONFIGURED" = "1" ] || fail "FFmpeg no se pudo configurar"
+  tail -n 80 ffbuild/config.log >&2 || true
+  fail "FFmpeg no se pudo configurar"
+fi
 
 grep -q '^#define CONFIG_MBEDTLS 1' config.h || fail "FFmpeg no habilito mbedTLS"
 grep -q '^#define CONFIG_HTTPS_PROTOCOL 1' config.h || fail "FFmpeg no habilito https"
@@ -231,10 +278,7 @@ LINK_LIBS=(
 )
 if ! "$CC" $CFLAGS_TARGET $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
   cat "$WORK/link.log" >&2
-  if ! "$CC" $CFLAGS_TARGET -fuse-ld="$TOOLCHAIN/bin/ld" $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
-    cat "$WORK/link.log" >&2
-    fail "No se pudo enlazar una prueba contra FFmpeg"
-  fi
+  fail "No se pudo enlazar una prueba contra FFmpeg"
 fi
 file "$WORK/prueba"
 

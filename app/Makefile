@@ -1,4 +1,9 @@
-TARGET = iphone:clang:9.3:9.0
+XUPER_FFMPEG_SDK_VERSION ?= 9.3
+ifneq ($(wildcard vendor/ffmpeg/ldconfig.mk),)
+include vendor/ffmpeg/ldconfig.mk
+endif
+
+TARGET = iphone:clang:$(XUPER_FFMPEG_SDK_VERSION):9.0
 ARCHS = armv7
 
 include $(THEOS)/makefiles/common.mk
