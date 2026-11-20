@@ -121,8 +121,13 @@ jobs:
       - name: Instalar ldid
         run: |
           set -euo pipefail
-          sudo install -m 0755 "$THEOS/toolchain/linux/iphone/bin/ldid" /usr/local/bin/ldid
+          sudo ln -sf "$THEOS/toolchain/linux/iphone/bin/ldid" /usr/local/bin/ldid
           ldid 2>&1 | sed -n '1p' || true
+          if ldd "$THEOS/toolchain/linux/iphone/bin/ldid" | grep -q "not found"; then
+            echo "ldid no encuentra sus librerias" >&2
+            ldd "$THEOS/toolchain/linux/iphone/bin/ldid" >&2
+            exit 1
+          fi
 
       - name: Revisar codigo fuente
         run: python3 tools/lint.py
