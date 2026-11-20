@@ -104,12 +104,16 @@ void XPDrawVerticalGradient(CGContextRef context, CGRect rect, UIColor *topColor
   if (space == NULL) {
     return;
   }
-  NSArray *colors = @[ (topColor ?: XPColorBackground()).CGColor,
-                       (bottomColor ?: XPColorBackground()).CGColor ];
+  CGColorRef top = (topColor ?: XPColorBackground()).CGColor;
+  CGColorRef bottom = (bottomColor ?: XPColorBackground()).CGColor;
+  const void *values[2] = { top, bottom };
   CGFloat locations[2] = { 0.0f, 1.0f };
-  CGGradientRef gradient = CGGradientCreateWithColors(space,
-                                                      (__bridge CFArrayRef)colors,
-                                                      locations);
+  CFArrayRef colors = CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
+  CGGradientRef gradient = NULL;
+  if (colors != NULL) {
+    gradient = CGGradientCreateWithColors(space, colors, locations);
+    CFRelease(colors);
+  }
   if (gradient != NULL) {
     CGContextSaveGState(context);
     CGContextAddRect(context, rect);
@@ -134,12 +138,16 @@ void XPDrawHorizontalGradient(CGContextRef context, CGRect rect, UIColor *leftCo
   if (space == NULL) {
     return;
   }
-  NSArray *colors = @[ (leftColor ?: XPColorAccent()).CGColor,
-                       (rightColor ?: XPColorAccentAlt()).CGColor ];
+  CGColorRef left = (leftColor ?: XPColorAccent()).CGColor;
+  CGColorRef right = (rightColor ?: XPColorAccentAlt()).CGColor;
+  const void *values[2] = { left, right };
   CGFloat locations[2] = { 0.0f, 1.0f };
-  CGGradientRef gradient = CGGradientCreateWithColors(space,
-                                                      (__bridge CFArrayRef)colors,
-                                                      locations);
+  CFArrayRef colors = CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
+  CGGradientRef gradient = NULL;
+  if (colors != NULL) {
+    gradient = CGGradientCreateWithColors(space, colors, locations);
+    CFRelease(colors);
+  }
   if (gradient != NULL) {
     CGContextSaveGState(context);
     CGContextAddRect(context, rect);
