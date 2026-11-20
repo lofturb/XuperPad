@@ -98,7 +98,27 @@ log "pkg-config detecta mbedTLS en $WORK/pkgconfig"
 PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
   pkg-config --cflags --libs mbedtls || fail "el archivo mbedtls.pc no es valido"
 
-log "Configurando FFmpeg"
+cat > "$WORK/probe.c" <<'EOF'
+#include <string.h>
+
+int main(void)
+{
+    static volatile char origen[4] = { 1, 2, 3, 4 };
+    char destino[4];
+
+    memcpy(destino, (const void *)origen, sizeof(destino));
+    if (memcmp(destino, (const void *)origen, sizeof(destino)) != 0) {
+        return 1;
+    }
+    if (memchr(destino, 1, sizeof(destino)) == NULL) {
+        return 2;
+    }
+    memset(destino, 0, sizeof(destino));
+    return 0;
+}
+EOF
+
+cd "$WORK/ffmpeg"
 FF_ARGS=(
   --prefix="$OUT"
   --target-os=darwin
@@ -142,23 +162,36 @@ if [ -n "$STRIP" ]; then
   FF_ARGS+=(--strip="$STRIP")
 fi
 
-cd "$WORK/ffmpeg"
 LD_CANDIDATES=(
+  ""
   "-lSystem"
   "-framework Foundation -framework CoreFoundation -lobjc"
+  "-Wl,-undefined,dynamic_lookup"
 )
 LD_FLAGS=""
+CONFIGURED=0
 for LD_EXTRA in "${LD_CANDIDATES[@]}"; do
-  log "Configurando FFmpeg con $LD_EXTRA"
+  if [ -z "$LD_EXTRA" ]; then
+    log "Probando el enlace sin banderas de sistema"
+  else
+    log "Probando el enlace con $LD_EXTRA"
+  fi
+  if ! "$CC" $CFLAGS_TARGET $LDFLAGS_TARGET $LD_EXTRA \
+    -Wl,-dynamic,-search_paths_first "$WORK/probe.c" -o "$WORK/probe" > "$WORK/probe.log" 2>&1; then
+    tail -n 12 "$WORK/probe.log" >&2 || true
+    continue
+  fi
+  log "El enlace funciona; configurando FFmpeg"
   if PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
     ./configure "${FF_ARGS[@]}" --extra-ldflags="$LDFLAGS_FFMPEG $LD_EXTRA"; then
     LD_FLAGS="$LDFLAGS_FFMPEG $LD_EXTRA"
+    CONFIGURED=1
     break
   fi
   log "Ultimas lineas de ffbuild/config.log"
   tail -n 60 ffbuild/config.log >&2 || true
 done
-[ -n "$LD_FLAGS" ] || fail "FFmpeg no se pudo configurar"
+[ "$CONFIGURED" = "1" ] || fail "FFmpeg no se pudo configurar"
 
 grep -q '^#define CONFIG_MBEDTLS 1' config.h || fail "FFmpeg no habilito mbedTLS"
 grep -q '^#define CONFIG_HTTPS_PROTOCOL 1' config.h || fail "FFmpeg no habilito https"
