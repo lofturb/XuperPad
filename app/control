@@ -1,0 +1,10 @@
+Package: com.xuper.pad
+Name: XuperPad
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Cliente del catalogo XuperTV para iPad mini 1 con iOS 9.
+Homepage: https://github.com/lofturb/XuperPad
+Maintainer: lofturb
+Author: lofturb
+Section: Applications
+Depends: firmware (>= 9.0)

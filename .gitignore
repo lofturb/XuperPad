@@ -1,0 +1,24 @@
+# Theos
+app/.theos/
+app/packages/
+theos/
+
+# Paquetes construidos
+*.ipa
+*.deb
+
+# Artefactos de compilacion
+*.o
+*.d
+*.a
+*.dylib
+*.dSYM/
+
+# Python
+__pycache__/
+*.pyc
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+*.log
