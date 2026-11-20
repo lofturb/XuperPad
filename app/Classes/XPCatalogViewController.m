@@ -170,7 +170,7 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   if (fabs(self.collectionLayout.itemSize.width - itemWidth) > 0.5f ||
       fabs(self.collectionLayout.itemSize.height - itemHeight) > 0.5f) {
     self.collectionLayout.itemSize = CGSizeMake(itemWidth, itemHeight);
-    [self.collectionView invalidateLayout];
+    [self.collectionLayout invalidateLayout];
   }
 }
 
