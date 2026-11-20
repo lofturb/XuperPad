@@ -40,6 +40,7 @@ STRIP="$(pick_tool strip)" || STRIP=""
 
 [ -d "$SDK/System/Library/Frameworks" ] || fail "SDK incompleto: $SDK"
 [ -f "$SDK/usr/lib/crt1.o" ] || fail "El SDK no trae usr/lib/crt1.o"
+[ -f "$SDK/usr/lib/libSystem.tbd" ] || fail "El SDK no trae usr/lib/libSystem.tbd"
 
 log "Toolchain: $CC"
 log "SDK: $SDK"
@@ -108,7 +109,6 @@ FF_ARGS=(
   --ar="$AR"
   --pkg-config=pkg-config
   --extra-cflags="$CFLAGS_FFMPEG"
-  --extra-ldflags="$LDFLAGS_FFMPEG"
   --pkg-config-flags=--static
   --enable-static
   --disable-shared
@@ -143,12 +143,22 @@ if [ -n "$STRIP" ]; then
 fi
 
 cd "$WORK/ffmpeg"
-if ! PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
-  ./configure "${FF_ARGS[@]}"; then
+LD_CANDIDATES=(
+  "-lSystem"
+  "-framework Foundation -framework CoreFoundation -lobjc"
+)
+LD_FLAGS=""
+for LD_EXTRA in "${LD_CANDIDATES[@]}"; do
+  log "Configurando FFmpeg con $LD_EXTRA"
+  if PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
+    ./configure "${FF_ARGS[@]}" --extra-ldflags="$LDFLAGS_FFMPEG $LD_EXTRA"; then
+    LD_FLAGS="$LDFLAGS_FFMPEG $LD_EXTRA"
+    break
+  fi
   log "Ultimas lineas de ffbuild/config.log"
-  tail -n 120 ffbuild/config.log >&2 || true
-  fail "FFmpeg no se pudo configurar"
-fi
+  tail -n 60 ffbuild/config.log >&2 || true
+done
+[ -n "$LD_FLAGS" ] || fail "FFmpeg no se pudo configurar"
 
 grep -q '^#define CONFIG_MBEDTLS 1' config.h || fail "FFmpeg no habilito mbedTLS"
 grep -q '^#define CONFIG_HTTPS_PROTOCOL 1' config.h || fail "FFmpeg no habilito https"
@@ -186,9 +196,9 @@ LINK_LIBS=(
   "$OUT/lib/libmbedx509.a"
   "$OUT/lib/libmbedcrypto.a"
 )
-if ! "$CC" $CFLAGS_TARGET "$WORK/prueba.c" -o "$WORK/prueba" $LDFLAGS_TARGET "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
+if ! "$CC" $CFLAGS_TARGET $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
   cat "$WORK/link.log" >&2
-  if ! "$CC" $CFLAGS_TARGET -fuse-ld="$TOOLCHAIN/bin/ld" "$WORK/prueba.c" -o "$WORK/prueba" $LDFLAGS_TARGET "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
+  if ! "$CC" $CFLAGS_TARGET -fuse-ld="$TOOLCHAIN/bin/ld" $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
     cat "$WORK/link.log" >&2
     fail "No se pudo enlazar una prueba contra FFmpeg"
   fi
