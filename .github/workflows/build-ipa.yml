@@ -135,6 +135,7 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
           make clean || true
+          rm -rf /tmp/org.llvm.clang.runner/ModuleCache
           make -k package FINALPACKAGE=1 PACKAGE_FORMAT=ipa
 
       - name: Verificar el IPA
