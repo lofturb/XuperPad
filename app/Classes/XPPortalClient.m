@@ -40,7 +40,7 @@ static NSTimeInterval const XPPortalTimeout = 18;
 - (NSMutableDictionary *)bodyWithSessionInfo:(NSDictionary *)sessionInfo
 {
   NSMutableDictionary *body =
-      [[XPDeviceParameters(sessionInfo[@"seed"]) mutableCopy];
+      [XPDeviceParameters(sessionInfo[@"seed"]) mutableCopy];
   [body setObject:XPPortalCode forKey:@"portalCode"];
   [body setObject:sessionInfo[@"userId"] ?: @"" forKey:@"userId"];
   [body setObject:sessionInfo[@"userToken"] ?: @"" forKey:@"userToken"];
