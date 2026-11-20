@@ -26,7 +26,7 @@
 
   UITabBarController *tabs = [[UITabBarController alloc] init];
   tabs.viewControllers = @[ catalogNavigation, liveNavigation ];
-  tabs.tabBarItems = @[
+  tabs.tabBar.items = @[
     [[UITabBarItem alloc] initWithTitle:@"Catalogo"
                                   image:nil
                                     tag:0],
