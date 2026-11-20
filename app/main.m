@@ -3,7 +3,7 @@
 //
 
 #import <UIKit/UIKit.h>
-#import "XPAppDelegate.h"
+#import "Classes/XPAppDelegate.h"
 
 int main(int argc, char *argv[])
 {

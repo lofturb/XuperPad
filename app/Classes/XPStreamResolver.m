@@ -10,6 +10,15 @@
 
 static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
 
+@interface XPStreamResolver ()
++ (void)fetchSlbInfoWithPaths:(NSArray *)paths
+                    parameters:(NSDictionary *)parameters
+                     atIndex:(NSUInteger)index
+                    isUsable:(BOOL (^)(NSDictionary *slb))isUsable
+                      errors:(NSMutableArray *)errors
+                  completion:(void (^)(NSDictionary *slb, NSError *error))completion;
+@end
+
 @implementation XPStreamResolver
 
 + (NSError *)errorWithMessage:(NSString *)message

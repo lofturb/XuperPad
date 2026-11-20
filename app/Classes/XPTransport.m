@@ -13,6 +13,17 @@ static NSString *const XPTransportErrorDomain = @"XPTransport";
 static NSMutableDictionary *gXPAddressCache = nil;
 static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
 
+@interface XPTransport ()
++ (void)postToPortalHosts:(NSArray *)hosts
+                     path:(NSString *)path
+                  headers:(NSDictionary *)headers
+                     body:(NSData *)body
+                  timeout:(NSTimeInterval)timeout
+                  attempt:(NSUInteger)attempt
+                lastError:(NSError *)lastError
+               completion:(XPTransportCompletion)completion;
+@end
+
 @implementation XPTransport
 
 + (NSMutableDictionary *)addressCache
@@ -197,74 +208,97 @@ static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
                   headers:(NSDictionary *)headers
                      body:(NSData *)body
                   timeout:(NSTimeInterval)timeout
-                complete:(XPTransportCompletion)completion
+              completion:(XPTransportCompletion)completion
 {
-  NSMutableArray *pending = [NSMutableArray arrayWithArray:hosts];
-  __block NSError *lastError = nil;
+  [self postToPortalHosts:hosts
+                      path:path
+                   headers:headers
+                      body:body
+                   timeout:timeout
+                   attempt:0
+                 lastError:nil
+                completion:completion];
+}
 
-  void (^attemptNextHost)(void) = ^{
-    if (pending.count == 0) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        if (completion != nil) {
-          completion(nil, lastError);
-        }
-      });
-      return;
-    }
-
-    NSString *host = pending.firstObject;
-    [pending removeObjectAtIndex:0];
-
-    NSString *fullPath = [XPApiBasePath stringByAppendingString:path];
-    NSURL *address = [NSURL URLWithString:
-        [NSString stringWithFormat:@"https://%@%@", host, fullPath]];
-    if (address == nil) {
-      attemptNextHost();
-      return;
-    }
-
-    NSMutableURLRequest *request = [self requestWithAddress:address
-                                                    headers:headers
-                                                       body:body
-                                                    timeout:timeout];
-    NSURLResponse *response = nil;
-    NSError *error = nil;
-    NSData *data = [NSURLConnection sendSynchronousRequest:request
-                                         returningResponse:&response
-                                                     error:&error];
-    BOOL succeeded = NO;
-    if (data != nil && error == nil &&
-        [response isKindOfClass:[NSHTTPURLResponse class]]) {
-      NSInteger status = [(NSHTTPURLResponse *)response statusCode];
-      succeeded = (status >= 200 && status < 300);
-      if (!succeeded) {
-        error = [NSError errorWithDomain:XPTransportErrorDomain
-                                     code:status
-                                 userInfo:@{ NSLocalizedDescriptionKey :
-                                             @"el portal respondio con error" }];
++ (void)postToPortalHosts:(NSArray *)hosts
+                     path:(NSString *)path
+                  headers:(NSDictionary *)headers
+                     body:(NSData *)body
+                  timeout:(NSTimeInterval)timeout
+                  attempt:(NSUInteger)attempt
+                lastError:(NSError *)lastError
+               completion:(XPTransportCompletion)completion
+{
+  if (attempt >= hosts.count) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (completion != nil) {
+        completion(nil, lastError);
       }
+    });
+    return;
+  }
+
+  NSString *host = hosts[attempt];
+  NSString *fullPath = [XPApiBasePath stringByAppendingString:path];
+  NSURL *address = [NSURL URLWithString:
+      [NSString stringWithFormat:@"https://%@%@", host, fullPath]];
+  if (address == nil) {
+    [self postToPortalHosts:hosts
+                        path:path
+                     headers:headers
+                        body:body
+                     timeout:timeout
+                     attempt:attempt + 1
+                   lastError:lastError
+                  completion:completion];
+    return;
+  }
+
+  NSMutableURLRequest *request = [self requestWithAddress:address
+                                                  headers:headers
+                                                     body:body
+                                                  timeout:timeout];
+  NSURLResponse *response = nil;
+  NSError *error = nil;
+  NSData *data = [NSURLConnection sendSynchronousRequest:request
+                                       returningResponse:&response
+                                                   error:&error];
+  BOOL succeeded = NO;
+  if (data != nil && error == nil &&
+      [response isKindOfClass:[NSHTTPURLResponse class]]) {
+    NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+    succeeded = (status >= 200 && status < 300);
+    if (!succeeded) {
+      error = [NSError errorWithDomain:XPTransportErrorDomain
+                                   code:status
+                               userInfo:@{ NSLocalizedDescriptionKey :
+                                               @"el portal respondio con error" }];
     }
+  }
 
-    if (succeeded) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        if (completion != nil) {
-          completion(data, nil);
-        }
-      });
-      return;
-    }
+  if (succeeded) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (completion != nil) {
+        completion(data, nil);
+      }
+    });
+    return;
+  }
 
-    lastError = error;
-    attemptNextHost();
-  };
-
-  attemptNextHost();
+  [self postToPortalHosts:hosts
+                      path:path
+                   headers:headers
+                      body:body
+                   timeout:timeout
+                   attempt:attempt + 1
+                 lastError:error
+                completion:completion];
 }
 
 + (void)getFromAddress:(NSURL *)address
                headers:(NSDictionary *)headers
                timeout:(NSTimeInterval)timeout
-              complete:(XPTransportCompletion)completion
+            completion:(XPTransportCompletion)completion
 {
   if (address == nil) {
     dispatch_async(dispatch_get_main_queue(), ^{

@@ -52,6 +52,9 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
 @property (nonatomic, strong) NSMutableArray *entries;
 @property (nonatomic, strong) NSMutableArray *exhausted;
 @property (nonatomic, assign) BOOL refreshing;
+- (void)fetchSeedsAtIndex:(NSUInteger)index
+                completion:(void (^)(NSUInteger))completion;
+- (void)mergeSeedsFromDictionary:(NSDictionary *)decoded;
 @end
 
 @implementation XPSeedPool
@@ -139,66 +142,71 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
     return;
   }
   self.refreshing = YES;
+  [self fetchSeedsAtIndex:0 completion:completion];
+}
 
+- (void)fetchSeedsAtIndex:(NSUInteger)index
+                completion:(void (^)(NSUInteger))completion
+{
   NSArray *addresses = self.sourceAddresses;
-  __block NSUInteger addressIndex = 0;
-  __block void (^tryNextAddress)(void) = nil;
-
-  void (^applySeeds)(id) = ^(id decoded) {
-    if ([decoded isKindOfClass:[NSDictionary class]]) {
-      id storedSeeds = ((NSDictionary *)decoded)[@"seeds"];
-      if ([storedSeeds isKindOfClass:[NSArray class]]) {
-        for (id item in storedSeeds) {
-          XPSeedEntry *entry = [XPSeedEntry entryFromDictionary:item];
-          if (entry == nil) {
-            continue;
-          }
-          BOOL alreadyKnown = NO;
-          for (XPSeedEntry *known in self.entries) {
-            if ([known.seed isEqualToString:entry.seed]) {
-              alreadyKnown = YES;
-              break;
-            }
-          }
-          if (!alreadyKnown) {
-            [self.entries addObject:entry];
-          }
-        }
-        [self saveToDisk];
-      }
-    }
+  if (index >= addresses.count) {
     self.refreshing = NO;
     if (completion != nil) {
       completion([self usableCount]);
     }
-  };
+    return;
+  }
 
-  tryNextAddress = ^{
-    if (addressIndex >= addresses.count) {
-      applySeeds(nil);
+  NSString *address = addresses[index];
+  NSURL *url = [NSURL URLWithString:address];
+  if (url == nil) {
+    [self fetchSeedsAtIndex:index + 1 completion:completion];
+    return;
+  }
+
+  [XPTransport getFromAddress:url
+                      headers:nil
+                      timeout:12
+                   completion:^(NSData *data, NSError *error) {
+    id decoded = nil;
+    if (data != nil && error == nil) {
+      decoded = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+    }
+    if (![decoded isKindOfClass:[NSDictionary class]]) {
+      [self fetchSeedsAtIndex:index + 1 completion:completion];
       return;
     }
-    NSString *address = addresses[addressIndex];
-    addressIndex++;
-    NSURL *url = [NSURL URLWithString:address];
-    if (url == nil) {
-      tryNextAddress();
-      return;
+    [self mergeSeedsFromDictionary:decoded];
+    self.refreshing = NO;
+    if (completion != nil) {
+      completion([self usableCount]);
     }
-    [XPTransport getFromAddress:url
-                        headers:nil
-                        timeout:12
-                       completion:^(NSData *data, NSError *error) {
-      if (data == nil || error != nil) {
-        tryNextAddress();
-        return;
+  }];
+}
+
+- (void)mergeSeedsFromDictionary:(NSDictionary *)decoded
+{
+  id storedSeeds = decoded[@"seeds"];
+  if (![storedSeeds isKindOfClass:[NSArray class]]) {
+    return;
+  }
+  for (id item in storedSeeds) {
+    XPSeedEntry *entry = [XPSeedEntry entryFromDictionary:item];
+    if (entry == nil) {
+      continue;
+    }
+    BOOL alreadyKnown = NO;
+    for (XPSeedEntry *known in self.entries) {
+      if ([known.seed isEqualToString:entry.seed]) {
+        alreadyKnown = YES;
+        break;
       }
-      id decoded = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
-      applySeeds(decoded);
-    }];
-  };
-
-  tryNextAddress();
+    }
+    if (!alreadyKnown) {
+      [self.entries addObject:entry];
+    }
+  }
+  [self saveToDisk];
 }
 
 - (XPSeedEntry *)usableSeed

@@ -16,13 +16,13 @@ typedef void (^XPTransportCompletion)(NSData *data, NSError *error);
                   headers:(NSDictionary *)headers
                      body:(NSData *)body
                   timeout:(NSTimeInterval)timeout
-                complete:(XPTransportCompletion)completion;
+              completion:(XPTransportCompletion)completion;
 
 /// Envia un GET a una direccion cualquiera.
 + (void)getFromAddress:(NSURL *)address
                headers:(NSDictionary *)headers
                timeout:(NSTimeInterval)timeout
-              complete:(XPTransportCompletion)completion;
+            completion:(XPTransportCompletion)completion;
 
 /// Resuelve un nombre de dominio a una direccion IPv4 usando DNS sobre HTTPS.
 + (NSString *)addressForHost:(NSString *)host timeout:(NSTimeInterval)timeout;
