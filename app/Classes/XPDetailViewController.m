@@ -293,10 +293,14 @@
                                               isSeries:isSeries
                                             completion:^(NSDictionary *detail, NSError *error) {
     if (detail == nil) {
+      NSLog(@"[XuperPad] detalle %@ error %@", contentId, error.localizedDescription);
       [weakSelf.statusView showMessage:error.localizedDescription ?: @"No se pudo cargar el título"
                                   retry:YES];
       return;
     }
+    NSLog(@"[XuperPad] detalle %@ capitulos %lu",
+          detail[@"name"] ?: contentId,
+          (unsigned long)[detail[@"episodes"] count]);
     [weakSelf.statusView hideStatus];
     weakSelf.detailInfo = detail;
     weakSelf.episodes = [detail[@"episodes"] mutableCopy] ?: [NSMutableArray array];

@@ -120,6 +120,7 @@ static NSTimeInterval const XPPortalTimeout = 18;
 
       NSDictionary *envelope = (NSDictionary *)decoded;
       NSString *returnCode = [envelope[@"returnCode"] description];
+      NSLog(@"[XuperPad] portal %@ returnCode %@", path, returnCode);
       if (![returnCode isEqualToString:@"0"]) {
         NSString *message = XPPortalErrorMessage(returnCode, envelope[@"errorMessage"]);
         if (!retried && [XPSessionDeadErrorCodes() containsObject:returnCode]) {

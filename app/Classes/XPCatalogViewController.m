@@ -298,9 +298,11 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
                                                     page:1
                                               completion:^(NSArray *sections, NSError *error) {
     if (error != nil) {
+      NSLog(@"[XuperPad] columna %@ error %@", columnCode, error.localizedDescription);
       [weakSelf.statusView showMessage:error.localizedDescription retry:YES];
       return;
     }
+    NSLog(@"[XuperPad] columna %@ secciones %lu", columnCode, (unsigned long)sections.count);
     [weakSelf.statusView hideStatus];
     weakSelf.sections = [sections mutableCopy] ?: [NSMutableArray array];
     [weakSelf.collectionView reloadData];
@@ -404,9 +406,11 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
                                           page:1
                                     completion:^(NSArray *titles, NSError *error) {
     if (error != nil) {
+      NSLog(@"[XuperPad] busqueda %@ error %@", text, error.localizedDescription);
       [weakSelf.statusView showMessage:error.localizedDescription retry:YES];
       return;
     }
+    NSLog(@"[XuperPad] busqueda %@ resultados %lu", text, (unsigned long)titles.count);
     [weakSelf.statusView hideStatus];
     NSArray *filtered = [weakSelf filterTitles:titles];
     if (filtered.count > 0) {

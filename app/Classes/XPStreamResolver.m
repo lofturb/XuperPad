@@ -140,6 +140,7 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
     }
 
     NSArray *tracks = [XPPortalParser tracksFromPlayResponse:response];
+    NSLog(@"[XuperPad] vod pistas %lu", (unsigned long)tracks.count);
     if (tracks.count == 0) {
       if (completion != nil) {
         completion(nil, [self errorWithMessage:@"el portal no devolvio pistas de video"]);
@@ -220,6 +221,9 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
       }
 
       NSString *mime = [format isEqualToString:@"ts"] ? @"video/mp2t" : @"video/mp4";
+      NSLog(@"[XuperPad] vod direcciones %lu respaldo %lu",
+            (unsigned long)streams.count,
+            (unsigned long)backups.count);
       if (completion != nil) {
         completion(@{ @"url" : primary[@"url"],
                       @"backupUrls" : backups,
