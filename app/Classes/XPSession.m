@@ -79,7 +79,7 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
   if (self.state != nil &&
       self.state.userToken.length > 0 &&
       self.state.expiresAt - XPSessionSafetyMargin > now) {
-    [self notifyWaitingWithState:self.state error:nil];
+    [self notifyWaitingWithState:[self dictionaryFromState:self.state] error:nil];
     return;
   }
 
