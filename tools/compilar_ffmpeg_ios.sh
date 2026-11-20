@@ -124,6 +124,7 @@ FF_ARGS=(
   --enable-decoder=hevc,aac
   --enable-parser=hevc,aac
   --enable-mbedtls
+  --enable-version3
 )
 if [ -n "$NM" ]; then
   FF_ARGS+=(--nm="$NM")
