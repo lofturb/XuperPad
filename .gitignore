@@ -14,6 +14,9 @@ theos/
 *.dylib
 *.dSYM/
 
+# Librerias compiladas para iOS
+app/vendor/
+
 # Python
 __pycache__/
 *.pyc

@@ -24,7 +24,7 @@ jobs:
           sudo add-apt-repository -y universe || true
           sudo apt-get update
           sudo apt-get install -y build-essential fakeroot rsync curl perl zip unzip git jq file \
-            libxml2 libbsd0 zlib1g libuuid1 xz-utils libz3-dev libtinfo6 python3-pil
+            libxml2 libbsd0 zlib1g libuuid1 xz-utils libz3-dev libtinfo6 python3-pil pkg-config
           sudo update-alternatives --set fakeroot /usr/bin/fakeroot-sysv || true
 
       - name: Preparar libtinfo5
@@ -131,6 +131,24 @@ jobs:
 
       - name: Revisar codigo fuente
         run: python3 tools/lint.py
+
+      - name: Listar el toolchain
+        run: ls "$THEOS/toolchain/linux/iphone/bin"
+
+      - name: Cachear FFmpeg para armv7
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: app/vendor/ffmpeg
+          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10
+
+      - name: Compilar FFmpeg para armv7
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          bash tools/compilar_ffmpeg_ios.sh
+          ls -l app/vendor/ffmpeg/lib
+          du -sh app/vendor/ffmpeg
 
       - name: Generar recursos
         run: python3 tools/generar_recursos.py
