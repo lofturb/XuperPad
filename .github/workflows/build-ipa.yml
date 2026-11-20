@@ -74,7 +74,12 @@ jobs:
           cp -R "$WORK/ios-arm64e-clang-toolchain/." "$THEOS/toolchain/linux/iphone/"
           test -x "$THEOS/toolchain/linux/iphone/bin/clang"
           test -x "$THEOS/toolchain/linux/iphone/bin/ldid"
-          "$THEOS/toolchain/linux/iphone/bin/clang" -print-targets | grep -qi armv7
+          "$THEOS/toolchain/linux/iphone/bin/clang" --version
+          grep -qa armv7 "$THEOS/toolchain/linux/iphone/lib/libclang-cpp.so.10"
+          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/probe.c"
+          "$THEOS/toolchain/linux/iphone/bin/clang" -target armv7-apple-ios9.0 \
+            -c "$RUNNER_TEMP/probe.c" -o "$RUNNER_TEMP/probe.o"
+          test -s "$RUNNER_TEMP/probe.o"
           for BIN in clang ld ar as strip lipo ldid; do
             if ldd "$THEOS/toolchain/linux/iphone/bin/$BIN" | grep -q "not found"; then
               echo "Faltan librerias para $BIN:" >&2
