@@ -37,24 +37,26 @@ static NSTimeInterval const XPPortalTimeout = 18;
   return self;
 }
 
-- (NSDictionary *)baseParameters
+- (NSMutableDictionary *)bodyWithSessionInfo:(NSDictionary *)sessionInfo
 {
-  NSMutableDictionary *parameters = [NSMutableDictionary dictionary];
-  [parameters setObject:XPPortalCode forKey:@"portalCode"];
-  [parameters setObject:XPFixedMacAddress forKey:@"macAddr"];
-  [parameters setObject:@"" forKey:@"reserve1"];
-  [parameters setObject:@"1" forKey:@"userIdentity"];
-  [parameters setObject:@"merge" forKey:@"type"];
-  [parameters setObject:XPClientAppVersion forKey:@"appVer"];
-  [parameters setObject:@"es" forKey:@"lang"];
-  [parameters setObject:@"1" forKey:@"encMediaSupported"];
-  [parameters setObject:@"0" forKey:@"pipFlag"];
-  [parameters setObject:@"0" forKey:@"hasPay"];
-  return parameters;
+  NSMutableDictionary *body =
+      [[XPDeviceParameters(sessionInfo[@"seed"]) mutableCopy];
+  [body setObject:XPPortalCode forKey:@"portalCode"];
+  [body setObject:sessionInfo[@"userId"] ?: @"" forKey:@"userId"];
+  [body setObject:sessionInfo[@"userToken"] ?: @"" forKey:@"userToken"];
+  return body;
 }
 
 - (void)callPath:(NSString *)path
       parameters:(NSDictionary *)parameters
+       completion:(void (^)(NSDictionary *response, NSError *error))completion
+{
+  [self callPath:path parameters:parameters retried:NO completion:completion];
+}
+
+- (void)callPath:(NSString *)path
+      parameters:(NSDictionary *)parameters
+         retried:(BOOL)retried
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
   [[XPSession sharedSession] ensureSessionWithCompletion:^(NSDictionary *sessionInfo, NSError *sessionError) {
@@ -65,11 +67,8 @@ static NSTimeInterval const XPPortalTimeout = 18;
       return;
     }
 
-    NSMutableDictionary *body = [[self baseParameters] mutableCopy];
+    NSMutableDictionary *body = [self bodyWithSessionInfo:sessionInfo];
     [body addEntriesFromDictionary:parameters];
-    [body setObject:sessionInfo[@"userId"] forKey:@"userId"];
-    [body setObject:sessionInfo[@"userToken"] forKey:@"userToken"];
-    [body setObject:sessionInfo[@"seed"] forKey:@"sn"];
 
     NSError *encodingError = nil;
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:body
@@ -122,12 +121,16 @@ static NSTimeInterval const XPPortalTimeout = 18;
       NSDictionary *envelope = (NSDictionary *)decoded;
       NSString *returnCode = [envelope[@"returnCode"] description];
       if (![returnCode isEqualToString:@"0"]) {
-        NSString *message = envelope[@"errorMessage"];
-        if (![message isKindOfClass:[NSString class]]) {
-          message = @"el portal rechazo la peticion";
+        NSString *message = XPPortalErrorMessage(returnCode, envelope[@"errorMessage"]);
+        if (!retried && [XPSessionDeadErrorCodes() containsObject:returnCode]) {
+          [[XPSession sharedSession] invalidateSharedSeed];
+          [self callPath:path parameters:parameters retried:YES completion:completion];
+          return;
         }
-        if ([XPSessionDeadErrorCodes() containsObject:returnCode]) {
+        if (!retried && [returnCode isEqualToString:XPGeoBlockedErrorCode]) {
           [[XPSession sharedSession] invalidate];
+          [self callPath:path parameters:parameters retried:YES completion:completion];
+          return;
         }
         if (completion != nil) {
           completion(nil, [self errorWithMessage:message code:returnCode]);

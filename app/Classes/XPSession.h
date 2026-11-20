@@ -43,4 +43,7 @@ typedef void (^XPSessionCompletion)(NSDictionary *sessionInfo, NSError *error);
 /// Descarta la sesion actual para forzar una renovacion.
 - (void)invalidate;
 
+/// Descarta la sesion actual y marca la credencial compartida como agotada.
+- (void)invalidateSharedSeed;
+
 @end

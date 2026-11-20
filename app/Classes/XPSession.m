@@ -51,22 +51,20 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
   self.state = nil;
 }
 
+- (void)invalidateSharedSeed
+{
+  if (self.state != nil && self.state.fromSharedSeed) {
+    NSString *seed = self.state.seed;
+    if (seed.length > 0) {
+      [[XPSeedPool sharedPool] markSeedAsExhausted:seed];
+    }
+  }
+  self.state = nil;
+}
+
 - (NSDictionary *)deviceParametersWithSeed:(NSString *)seed
 {
-  return @{ @"sn" : seed ?: @"",
-            @"loginType" : @"2",
-            @"appLanguage" : @"en",
-            @"hardwareInfo" : @"ranchu",
-            @"model" : @"sdk_gphone64_arm64",
-            @"product" : @"sdk_gphone64_arm64",
-            @"cpu" : @"arm64-v8a",
-            @"reserve1" : XPFixedReserve,
-            @"deviceToken" : @"",
-            @"drmId" : XPFixedDrmId,
-            @"sdkVer" : @"33",
-            @"apkVersion" : XPClientAppVersion,
-            @"sysVersion" : XPClientPackageVersion,
-            @"appId" : XPClientAppId };
+  return XPDeviceParameters(seed);
 }
 
 - (void)ensureSessionWithCompletion:(XPSessionCompletion)completion
@@ -88,14 +86,17 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
   }
   self.working = YES;
 
-  [self createFreshSessionWithCompletion:^(NSDictionary *result, NSError *error) {
-    if (result != nil) {
-      [self notifyWaitingWithState:result error:nil];
+  /* El portal rechaza la activacion real en regiones bloqueadas
+     (portal100024). El port de referencia resuelve eso adoptando una
+     credencial publicada, por eso se intenta primero esa via. */
+  [self adoptSharedSeedWithCompletion:^(NSDictionary *seedResult, NSError *seedError) {
+    if (seedResult != nil) {
+      [self notifyWaitingWithState:seedResult error:nil];
       return;
     }
-    [self adoptSharedSeedWithCompletion:^(NSDictionary *seedResult, NSError *seedError) {
-      if (seedResult != nil) {
-        [self notifyWaitingWithState:seedResult error:nil];
+    [self createFreshSessionWithCompletion:^(NSDictionary *result, NSError *error) {
+      if (result != nil) {
+        [self notifyWaitingWithState:result error:nil];
         return;
       }
       [self notifyWaitingWithState:nil error:(error ?: seedError)];
@@ -212,43 +213,65 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
       return;
     }
 
-    NSMutableDictionary *parameters =
-        [[self deviceParametersWithSeed:entry.seed] mutableCopy];
-    [parameters setObject:@"" forKey:@"authVersion"];
-    [parameters setObject:@"" forKey:@"authCode"];
-    [parameters setObject:@"" forKey:@"preCode"];
-    [parameters setObject:XPFixedMacAddress forKey:@"macAddr"];
-    [parameters setObject:@"" forKey:@"reserve1"];
-    [parameters setObject:@"4" forKey:@"openNum"];
-    [parameters setObject:@"default" forKey:@"channel"];
-    [parameters setObject:@"" forKey:@"matadata"];
-    [parameters setObject:@"" forKey:@"signdata"];
-
-    [self callPortalPath:@"v8/active"
-              parameters:parameters
-               completion:^(NSDictionary *activation, NSError *activationError) {
-      NSString *userIdentifier = activation[@"userId"];
-      NSString *userToken = activation[@"userToken"];
-      if (![userIdentifier isKindOfClass:[NSString class]] || userIdentifier.length == 0 ||
-          ![userToken isKindOfClass:[NSString class]] || userToken.length == 0) {
-        [pool markSeedAsExhausted:entry.seed];
-        if (completion != nil) {
-          completion(nil, activationError ?: [self errorWithMessage:@"no se pudo reutilizar la credencial"]);
-        }
-        return;
-      }
-
+    if (entry.userIdentifier.length > 0 && entry.userToken.length > 0) {
+      NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
       XPSessionState *state = [[XPSessionState alloc] init];
       state.seed = entry.seed;
-      state.userIdentifier = userIdentifier;
-      state.userToken = userToken;
-      state.expiresAt = entry.expiresAt;
+      state.userIdentifier = entry.userIdentifier;
+      state.userToken = entry.userToken;
+      state.expiresAt = entry.expiresAt > now + 600 ? entry.expiresAt : now + 600;
       state.fromSharedSeed = YES;
       self.state = state;
       if (completion != nil) {
         completion([self dictionaryFromState:state], nil);
       }
-    }];
+      return;
+    }
+
+    [self activateSeed:entry completion:completion];
+  }];
+}
+
+- (void)activateSeed:(XPSeedEntry *)entry
+           completion:(void (^)(NSDictionary *, NSError *))completion
+{
+  XPSeedPool *pool = [XPSeedPool sharedPool];
+  NSMutableDictionary *parameters =
+      [[self deviceParametersWithSeed:entry.seed] mutableCopy];
+  [parameters setObject:@"" forKey:@"authVersion"];
+  [parameters setObject:@"" forKey:@"authCode"];
+  [parameters setObject:@"" forKey:@"preCode"];
+  [parameters setObject:XPFixedMacAddress forKey:@"macAddr"];
+  [parameters setObject:@"" forKey:@"reserve1"];
+  [parameters setObject:@4 forKey:@"openNum"];
+  [parameters setObject:@"default" forKey:@"channel"];
+  [parameters setObject:@"" forKey:@"matadata"];
+  [parameters setObject:@"" forKey:@"signdata"];
+
+  [self callPortalPath:@"v8/active"
+            parameters:parameters
+             completion:^(NSDictionary *activation, NSError *activationError) {
+    NSString *userIdentifier = activation[@"userId"];
+    NSString *userToken = activation[@"userToken"];
+    if (![userIdentifier isKindOfClass:[NSString class]] || userIdentifier.length == 0 ||
+        ![userToken isKindOfClass:[NSString class]] || userToken.length == 0) {
+      [pool markSeedAsExhausted:entry.seed];
+      if (completion != nil) {
+        completion(nil, activationError ?: [self errorWithMessage:@"no se pudo reutilizar la credencial"]);
+      }
+      return;
+    }
+
+    XPSessionState *state = [[XPSessionState alloc] init];
+    state.seed = entry.seed;
+    state.userIdentifier = userIdentifier;
+    state.userToken = userToken;
+    state.expiresAt = entry.expiresAt;
+    state.fromSharedSeed = YES;
+    self.state = state;
+    if (completion != nil) {
+      completion([self dictionaryFromState:state], nil);
+    }
   }];
 }
 
@@ -266,9 +289,6 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
               completion:(void (^)(NSDictionary *, NSError *))completion
 {
   NSMutableDictionary *body = [parameters mutableCopy];
-  [body setObject:XPPortalCode forKey:@"portalCode"];
-  [body setObject:self.state.userIdentifier ?: @"" forKey:@"userId"];
-  [body setObject:self.state.userToken ?: @"" forKey:@"userToken"];
 
   NSError *encodingError = nil;
   NSData *jsonData = [NSJSONSerialization dataWithJSONObject:body
@@ -321,10 +341,7 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
     NSDictionary *response = (NSDictionary *)decoded;
     NSString *returnCode = [response[@"returnCode"] description];
     if (![returnCode isEqualToString:@"0"]) {
-      NSString *message = response[@"errorMessage"];
-      if (![message isKindOfClass:[NSString class]]) {
-        message = @"el portal rechazo la peticion";
-      }
+      NSString *message = XPPortalErrorMessage(returnCode, response[@"errorMessage"]);
       if (completion != nil) {
         completion(nil, [self errorWithMessage:message code:returnCode]);
       }

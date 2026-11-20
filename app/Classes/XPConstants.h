@@ -29,6 +29,9 @@ extern NSString *const XPApiBasePath;
 /// Hosts del portal, en orden de preferencia.
 extern NSArray *XPPortalHosts(void);
 
+/// Parametros de dispositivo que el portal exige en cada peticion.
+extern NSDictionary *XPDeviceParameters(NSString *sn);
+
 /// Clave de 3DES del protocolo (24 bytes, 3 claves).
 extern const unsigned char *XPTripleDesKey(void);
 
@@ -48,6 +51,9 @@ extern NSArray *XPSessionDeadErrorCodes(void);
 
 /// Codigo de error del portal que indica bloqueo geografico.
 extern NSString *const XPGeoBlockedErrorCode;
+
+/// Traduce el codigo y el mensaje del portal a un texto en castellano.
+extern NSString *XPPortalErrorMessage(NSString *returnCode, id rawMessage);
 
 /// Columnas de catalogo disponibles.
 extern NSString *const XPColumnFeatured;

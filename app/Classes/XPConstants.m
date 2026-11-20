@@ -47,6 +47,39 @@ NSArray *XPPortalHosts(void)
   return hosts;
 }
 
+NSString *XPPortalErrorMessage(NSString *returnCode, id rawMessage)
+{
+  if ([returnCode isEqualToString:XPGeoBlockedErrorCode]) {
+    return @"el portal bloquea esta region";
+  }
+  if ([XPSessionDeadErrorCodes() containsObject:returnCode]) {
+    return @"la sesion del portal caduco";
+  }
+  if ([rawMessage isKindOfClass:[NSString class]] && [rawMessage length] > 0) {
+    return rawMessage;
+  }
+  return @"el portal rechazo la peticion";
+}
+
+NSDictionary *XPDeviceParameters(NSString *sn)
+{
+  return @{ @"sn" : sn ?: @"",
+            @"loginType" : @"2",
+            @"appLanguage" : @"en",
+            @"hardwareInfo" : @"ranchu",
+            @"model" : @"sdk_gphone64_arm64",
+            @"product" : @"sdk_gphone64_arm64",
+            @"cpu" : @"arm64-v8a",
+            @"B29" : @"",
+            @"reserve1" : XPFixedReserve,
+            @"deviceToken" : @"",
+            @"drmId" : XPFixedDrmId,
+            @"sdkVer" : @33,
+            @"apkVersion" : XPClientAppVersion,
+            @"sysVersion" : XPClientPackageVersion,
+            @"appId" : XPClientAppId };
+}
+
 const unsigned char *XPTripleDesKey(void)
 {
   static const unsigned char bytes[24] = {
