@@ -166,22 +166,40 @@ jobs:
 
           path = sys.argv[1]
           with open(path, "rb") as handle:
-              raw = handle.read(4)
-              if raw == b"\xce\xfa\xed\xfe":
-                  endian = "<"
-              elif raw == b"\xfe\xed\xfa\xce":
-                  endian = ">"
-              else:
-                  raise SystemExit(f"Mach-O no reconocido: {raw.hex()}")
-              cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags = struct.unpack(
-                  endian + "6I", handle.read(24)
-              )
+              data = handle.read()
+          magic = data[:4]
+          if magic == b"\xce\xfa\xed\xfe":
+              endian = "<"
+          elif magic == b"\xfe\xed\xfa\xce":
+              endian = ">"
+          else:
+              raise SystemExit(f"Mach-O no reconocido: {magic.hex()}")
+          cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags = struct.unpack(
+              endian + "6I", data[4:28]
+          )
           if cputype != 12:
               raise SystemExit(f"Se esperaba CPU_TYPE_ARM (12), se obtuvo {cputype}")
           subtype = cpusubtype & 0x00FFFFFF
           if subtype not in (9, 11):
               raise SystemExit(f"Se esperaba armv7/armv7s, se obtuvo {subtype}")
-          print(f"Binario armv7 verificado: cputype={cputype} cpusubtype={subtype}")
+          if not flags & 0x200000:
+              raise SystemExit("El binario no tiene MH_PIE, no se puede instalar en iOS")
+          offset = 28
+          min_os = None
+          for _ in range(ncmds):
+              cmd, cmdsize = struct.unpack(endian + "2I", data[offset:offset + 8])
+              if cmd == 0x25:
+                  version, sdk = struct.unpack(endian + "2I", data[offset + 8:offset + 16])
+                  min_os = (version >> 16, (version >> 8) & 0xFF, version & 0xFF)
+              offset += cmdsize
+          if min_os is None:
+              raise SystemExit("El binario no declara LC_VERSION_MIN_IPHONEOS")
+          if min_os < (9, 0, 0):
+              raise SystemExit(f"El binario declara iOS {min_os[0]}.{min_os[1]}.{min_os[2]}")
+          print(
+              f"Binario verificado: cputype={cputype} cpusubtype={subtype} "
+              f"pie=1 minos={min_os[0]}.{min_os[1]}.{min_os[2]}"
+          )
           PY
 
       - name: Publicar como Release
