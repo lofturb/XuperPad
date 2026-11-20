@@ -351,10 +351,10 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
         }
         NSString *token = [self tokenFromAuthAddress:auth];
         NSString *signature = [self signatureForToken:token moment:moment];
-        NSString *signed = [NSString stringWithFormat:
+        NSString *signedAuth = [NSString stringWithFormat:
             @"%@&sign2_method=sign_o3&instance=0&start_moment=%lld&sign2=%@",
             auth, moment, signature];
-        NSDictionary *headers = @{ @"Content-Auth" : signed,
+        NSDictionary *headers = @{ @"Content-Auth" : signedAuth,
                                    @"Content-License" : license,
                                    @"User-Agent" : XPCdnUserAgent,
                                    @"App" : XPClientAppId,
