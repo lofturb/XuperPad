@@ -25,6 +25,7 @@ XuperPad_FRAMEWORKS = UIKit Foundation CoreGraphics AVFoundation AVKit
 XuperPad_LIBRARIES = c++abi
 
 XuperPad_CFLAGS = -fobjc-arc -fblocks \
+	-fno-optimize-sibling-calls \
 	-Wno-deprecated-declarations \
 	-Wno-unused-parameter \
 	-Wno-unused-variable \
