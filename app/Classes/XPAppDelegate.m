@@ -24,16 +24,17 @@
   UINavigationController *liveNavigation =
       [[UINavigationController alloc] initWithRootViewController:live];
 
+  catalogNavigation.tabBarItem =
+      [[UITabBarItem alloc] initWithTitle:@"Catalogo"
+                                    image:nil
+                                      tag:0];
+  liveNavigation.tabBarItem =
+      [[UITabBarItem alloc] initWithTitle:@"TV en vivo"
+                                    image:nil
+                                      tag:1];
+
   UITabBarController *tabs = [[UITabBarController alloc] init];
   tabs.viewControllers = @[ catalogNavigation, liveNavigation ];
-  tabs.tabBar.items = @[
-    [[UITabBarItem alloc] initWithTitle:@"Catalogo"
-                                  image:nil
-                                    tag:0],
-    [[UITabBarItem alloc] initWithTitle:@"TV en vivo"
-                                  image:nil
-                                    tag:1]
-  ];
 
   self.window.rootViewController = tabs;
   [self.window makeKeyAndVisible];
