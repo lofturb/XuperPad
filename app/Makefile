@@ -22,7 +22,7 @@ XuperPad_FILES = main.m \
 
 XuperPad_FRAMEWORKS = UIKit Foundation CoreGraphics AVFoundation AVKit
 
-XuperPad_LIBRARIES = -lc++abi
+XuperPad_LIBRARIES = c++abi
 
 XuperPad_CFLAGS = -fobjc-arc -fblocks \
 	-Wno-deprecated-declarations \
