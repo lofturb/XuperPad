@@ -89,7 +89,7 @@ jobs:
           done
           echo "Toolchain armv7 instalado"
 
-      - name: Instalar SDK de iOS 9.3
+      - name: Instalar SDKs de iOS
         env:
           SDK_TAG: ${{ steps.sdk.outputs.tag }}
         run: |
@@ -114,9 +114,22 @@ jobs:
               exit 1
             fi
           fi
-          test -d "$SDK9/System/Library/Frameworks/AVFoundation.framework"
-          test -d "$SDK9/System/Library/Frameworks/AVKit.framework"
-          echo "SDK 9.3 instalado con AVFoundation y AVKit"
+          for OBJ in crt1.o crt1.3.1.o dylib1.o bundle1.o gcrt1.o lazydylib1.o; do
+            if [ ! -f "$SDK10/usr/lib/$OBJ" ] && [ -f "$SDK9/usr/lib/$OBJ" ]; then
+              cp "$SDK9/usr/lib/$OBJ" "$SDK10/usr/lib/$OBJ"
+              echo "Completado $OBJ en el SDK 10.3"
+            fi
+          done
+          test -f "$SDK9/usr/lib/crt1.o"
+          test -f "$SDK9/usr/lib/libSystem.tbd"
+          test -f "$SDK10/usr/lib/crt1.o"
+          test -f "$SDK10/usr/lib/libSystem.tbd"
+          for SDK in "$SDK9" "$SDK10"; do
+            test -d "$SDK/System/Library/Frameworks/AVFoundation.framework"
+            test -d "$SDK/System/Library/Frameworks/AVKit.framework"
+            test -d "$SDK/System/Library/Frameworks/UIKit.framework"
+          done
+          echo "SDKs 9.3 y 10.3 instalados con AVFoundation, AVKit y UIKit"
 
       - name: Instalar ldid
         run: |
@@ -140,7 +153,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/vendor/ffmpeg
-          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10-v2
+          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10-v3
 
       - name: Compilar FFmpeg para armv7
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'

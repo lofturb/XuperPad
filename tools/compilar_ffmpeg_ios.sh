@@ -89,9 +89,33 @@ LINK_VARIANTS=(
 SDK_USED=""
 LD_EXTRA_USED=""
 DRIVER_USED=""
+
+STARTUP_OBJECTS=(crt1.o crt1.3.1.o dylib1.o bundle1.o gcrt1.o lazydylib1.o)
+
+complete_startup_objects() {
+  local sdk="$1" obj copied=0
+  [ -d "$sdk/usr/lib" ] || return 0
+  for obj in "${STARTUP_OBJECTS[@]}"; do
+    if [ ! -f "$sdk/usr/lib/$obj" ] && [ -f "$SDK9/usr/lib/$obj" ]; then
+      cp "$SDK9/usr/lib/$obj" "$sdk/usr/lib/$obj"
+      copied=1
+    fi
+  done
+  if [ "$copied" = 1 ]; then
+    log "Se completaron los objetos de arranque de $(basename "$sdk") con los del SDK 9.3"
+  fi
+}
+
+complete_startup_objects "$SDK10"
+complete_startup_objects "$SDK9"
+
 for SDK_CANDIDATE in "$SDK10" "$SDK9"; do
-  if [ ! -f "$SDK_CANDIDATE/usr/lib/crt1.o" ] || [ ! -f "$SDK_CANDIDATE/usr/lib/libSystem.tbd" ]; then
-    log "El SDK $(basename "$SDK_CANDIDATE") no tiene crt1.o o libSystem.tbd"
+  if [ ! -f "$SDK_CANDIDATE/usr/lib/libSystem.tbd" ]; then
+    log "El SDK $(basename "$SDK_CANDIDATE") no tiene usr/lib/libSystem.tbd"
+    continue
+  fi
+  if [ ! -f "$SDK_CANDIDATE/usr/lib/crt1.o" ]; then
+    log "El SDK $(basename "$SDK_CANDIDATE") no tiene usr/lib/crt1.o"
     continue
   fi
   for DRIVER_CANDIDATE in "$CC" "$CXX"; do
@@ -114,6 +138,12 @@ done
 [ -n "$SDK_USED" ] || fail "Ninguna variante de enlace resuelve la libc de armv7"
 
 log "Enlace valido con $DRIVER_USED, $(basename "$SDK_USED") y [$LD_EXTRA_USED]"
+
+for FRAMEWORK in Foundation UIKit CoreGraphics AVFoundation AVKit; do
+  if [ ! -d "$SDK_USED/System/Library/Frameworks/$FRAMEWORK.framework" ]; then
+    log "AVISO: el SDK elegido no trae $FRAMEWORK.framework"
+  fi
+done
 
 if [ "$DRIVER_USED" != "$CC" ]; then
   CLANG_BIN="$CC"

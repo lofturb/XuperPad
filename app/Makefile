@@ -1,4 +1,4 @@
-XUPER_FFMPEG_SDK_VERSION ?= 9.3
+XUPER_FFMPEG_SDK_VERSION ?= 10.3
 ifneq ($(wildcard vendor/ffmpeg/ldconfig.mk),)
 include vendor/ffmpeg/ldconfig.mk
 endif
