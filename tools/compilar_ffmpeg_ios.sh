@@ -47,6 +47,8 @@ log "FFmpeg: $FFMPEG_TAG, mbedTLS: $MBEDTLS_TAG"
 
 CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK -miphoneos-version-min=$MIN_IOS -O2 -fPIC"
 LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK -miphoneos-version-min=$MIN_IOS"
+CFLAGS_FFMPEG="$CFLAGS_TARGET -I$OUT/include"
+LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib"
 
 mkdir -p "$WORK" "$OUT/lib" "$OUT/include"
 
@@ -91,6 +93,10 @@ Cflags: -I\${includedir} $CFLAGS_TARGET
 Libs: -L\${libdir} $LDFLAGS_TARGET -lmbedtls -lmbedx509 -lmbedcrypto
 EOF
 
+log "pkg-config detecta mbedTLS en $WORK/pkgconfig"
+PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
+  pkg-config --cflags --libs mbedtls || fail "el archivo mbedtls.pc no es valido"
+
 log "Configurando FFmpeg"
 FF_ARGS=(
   --prefix="$OUT"
@@ -101,8 +107,8 @@ FF_ARGS=(
   --cc="$CC"
   --ar="$AR"
   --pkg-config=pkg-config
-  --extra-cflags="$CFLAGS_TARGET"
-  --extra-ldflags="$LDFLAGS_TARGET"
+  --extra-cflags="$CFLAGS_FFMPEG"
+  --extra-ldflags="$LDFLAGS_FFMPEG"
   --pkg-config-flags=--static
   --enable-static
   --disable-shared
@@ -137,8 +143,12 @@ if [ -n "$STRIP" ]; then
 fi
 
 cd "$WORK/ffmpeg"
-PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
-  ./configure "${FF_ARGS[@]}"
+if ! PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
+  ./configure "${FF_ARGS[@]}"; then
+  log "Ultimas lineas de ffbuild/config.log"
+  tail -n 120 ffbuild/config.log >&2 || true
+  fail "FFmpeg no se pudo configurar"
+fi
 
 grep -q '^#define CONFIG_MBEDTLS 1' config.h || fail "FFmpeg no habilito mbedTLS"
 grep -q '^#define CONFIG_HTTPS_PROTOCOL 1' config.h || fail "FFmpeg no habilito https"
