@@ -17,7 +17,7 @@
   return nil;
 }
 
-+ (NSString *)posterFromAsset:(NSDictionary *)asset
++ (NSString *)imageFromAsset:(NSDictionary *)asset fileType:(NSString *)fileType
 {
   NSArray *posterList = asset[@"posterList"];
   if (![posterList isKindOfClass:[NSArray class]]) {
@@ -29,12 +29,21 @@
     }
     NSDictionary *entry = (NSDictionary *)item;
     NSString *kind = [self textValue:entry[@"fileType"]];
-    if ([kind isEqualToString:@"icon"] || [kind isEqualToString:@"poster"]) {
+    if ([kind isEqualToString:fileType]) {
       NSString *address = [self textValue:entry[@"fileUrl"]];
       if (address.length > 0) {
         return address;
       }
     }
+  }
+  return nil;
+}
+
++ (NSString *)firstImageFromAsset:(NSDictionary *)asset
+{
+  NSArray *posterList = asset[@"posterList"];
+  if (![posterList isKindOfClass:[NSArray class]]) {
+    return nil;
   }
   for (id item in posterList) {
     if (![item isKindOfClass:[NSDictionary class]]) {
@@ -46,6 +55,85 @@
     }
   }
   return nil;
+}
+
++ (NSString *)posterFromAsset:(NSDictionary *)asset
+{
+  NSString *icon = [self imageFromAsset:asset fileType:@"icon"];
+  if (icon.length > 0) {
+    return icon;
+  }
+  NSString *poster = [self imageFromAsset:asset fileType:@"poster"];
+  if (poster.length > 0) {
+    return poster;
+  }
+  return [self firstImageFromAsset:asset] ?: @"";
+}
+
++ (NSString *)backdropFromAsset:(NSDictionary *)asset
+{
+  NSString *stage = [self imageFromAsset:asset fileType:@"stage"];
+  if (stage.length > 0) {
+    return stage;
+  }
+  NSString *poster = [self imageFromAsset:asset fileType:@"poster"];
+  if (poster.length > 0) {
+    return poster;
+  }
+  return [self firstImageFromAsset:asset] ?: @"";
+}
+
++ (NSString *)landscapeFromAsset:(NSDictionary *)asset
+{
+  NSString *poster = [self imageFromAsset:asset fileType:@"poster"];
+  if (poster.length > 0) {
+    return poster;
+  }
+  NSString *stage = [self imageFromAsset:asset fileType:@"stage"];
+  if (stage.length > 0) {
+    return stage;
+  }
+  return [self firstImageFromAsset:asset] ?: @"";
+}
+
++ (NSArray *)genresFromAsset:(NSDictionary *)asset
+{
+  NSString *tags = [self textValue:asset[@"tags"]];
+  if (tags.length == 0) {
+    return @[];
+  }
+  NSMutableArray *result = [NSMutableArray array];
+  for (id part in [tags componentsSeparatedByString:@","]) {
+    NSString *value = [self textValue:part];
+    NSString *trimmed = [value stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length > 0) {
+      [result addObject:trimmed];
+    }
+  }
+  return result;
+}
+
++ (NSString *)yearFromAsset:(NSDictionary *)asset
+{
+  NSString *release = [self textValue:asset[@"releaseTime"]];
+  if (release.length == 0) {
+    release = [self textValue:asset[@"releaseDate"]];
+  }
+  if (release.length >= 4) {
+    return [release substringToIndex:4];
+  }
+  return release ?: @"";
+}
+
++ (BOOL)isSeriesAsset:(NSDictionary *)asset
+{
+  NSString *kind = [self textValue:asset[@"programType"]];
+  if ([kind isEqualToString:@"teleplay"] || [kind isEqualToString:@"series"]) {
+    return YES;
+  }
+  NSString *volumes = [self textValue:asset[@"volumnCount"]];
+  return [volumes integerValue] > 1;
 }
 
 + (NSDictionary *)titleFromAsset:(NSDictionary *)asset
@@ -62,17 +150,26 @@
     name = contentId;
   }
   NSString *kind = [self textValue:asset[@"programType"]];
+  BOOL series = [self isSeriesAsset:asset];
   return @{ @"id" : contentId,
             @"name" : name,
-            @"poster" : [self posterFromAsset:asset] ?: @"",
+            @"poster" : [self posterFromAsset:asset],
+            @"backdrop" : [self backdropFromAsset:asset],
+            @"landscape" : [self landscapeFromAsset:asset],
             @"summary" : [self textValue:asset[@"description"]] ?: @"",
-            @"year" : [self textValue:asset[@"releaseTime"]] ?: @"",
+            @"year" : [self yearFromAsset:asset],
             @"score" : [self textValue:asset[@"score"]] ?: @"",
-            @"series" : @([kind isEqualToString:@"2"]),
+            @"duration" : [self textValue:asset[@"duration"]] ?: @"",
+            @"genres" : [self genresFromAsset:asset],
+            @"director" : [self textValue:asset[@"director"]] ?: @"",
+            @"actors" : [self textValue:asset[@"actorDisplay"]] ?: @"",
+            @"programType" : kind ?: @"",
+            @"series" : @(series),
+            @"kind" : series ? @"serie" : @"película",
             @"volumes" : asset[@"volumnCount"] ?: @0 };
 }
 
-+ (NSArray *)titlesFromColumnResponse:(NSDictionary *)response
++ (NSArray *)sectionsFromColumnResponse:(NSDictionary *)response
 {
   NSMutableArray *result = [NSMutableArray array];
   NSArray *sections = response[@"recommendList"];
@@ -83,16 +180,38 @@
     if (![section isKindOfClass:[NSDictionary class]]) {
       continue;
     }
-    NSArray *assets = ((NSDictionary *)section)[@"assetList"];
+    NSDictionary *entry = (NSDictionary *)section;
+    NSArray *assets = entry[@"assetList"];
     if (![assets isKindOfClass:[NSArray class]]) {
       continue;
     }
+    NSMutableArray *items = [NSMutableArray array];
     for (id asset in assets) {
       NSDictionary *title = [self titleFromAsset:asset];
       if (title != nil) {
-        [result addObject:title];
+        [items addObject:title];
       }
     }
+    if (items.count == 0) {
+      continue;
+    }
+    NSString *name = [self textValue:entry[@"name"]];
+    if (name.length == 0) {
+      name = [self textValue:entry[@"title"]];
+    }
+    if (name.length == 0) {
+      name = @"Títulos";
+    }
+    [result addObject:@{ @"name" : name, @"items" : items }];
+  }
+  return result;
+}
+
++ (NSArray *)titlesFromColumnResponse:(NSDictionary *)response
+{
+  NSMutableArray *result = [NSMutableArray array];
+  for (id section in [self sectionsFromColumnResponse:response]) {
+    [result addObjectsFromArray:((NSDictionary *)section)[@"items"]];
   }
   return result;
 }
@@ -189,24 +308,43 @@
 + (NSDictionary *)detailFromResponse:(NSDictionary *)response
 {
   NSMutableDictionary *detail = [NSMutableDictionary dictionary];
-  NSArray *simpleList = response[@"simpleProgramList"];
-  if ([simpleList isKindOfClass:[NSArray class]] && simpleList.count > 0) {
-    id first = simpleList.firstObject;
-    if ([first isKindOfClass:[NSDictionary class]]) {
-      NSDictionary *entry = (NSDictionary *)first;
-      detail[@"id"] = [self textValue:entry[@"contentId"]] ?: @"";
-      detail[@"name"] = [self textValue:entry[@"name"]] ?: @"";
-      detail[@"summary"] = [self textValue:entry[@"description"]] ?: @"";
-      detail[@"year"] = [self textValue:entry[@"releaseTime"]] ?: @"";
-      detail[@"score"] = [self textValue:entry[@"score"]] ?: @"";
-      detail[@"poster"] = [self posterFromAsset:entry] ?: @"";
-    }
+  NSDictionary *assetData = response[@"assetData"];
+  if (![assetData isKindOfClass:[NSDictionary class]]) {
+    assetData = response;
   }
 
+  NSString *contentId = [self textValue:assetData[@"contentId"]] ?: @"";
+  NSString *name = [self textValue:assetData[@"name"]] ?: @"";
+  NSString *summary = [self textValue:assetData[@"description"]] ?: @"";
+  NSString *year = [self yearFromAsset:assetData];
+  NSString *score = [self textValue:assetData[@"score"]] ?: @"";
+  NSString *duration = [self textValue:assetData[@"duration"]] ?: @"";
+  NSArray *genres = [self genresFromAsset:assetData];
+  NSString *director = [self textValue:assetData[@"director"]] ?: @"";
+  NSString *actors = [self textValue:assetData[@"actorDisplay"]] ?: @"";
+  BOOL series = [self isSeriesAsset:assetData];
+
+  detail[@"id"] = contentId;
+  detail[@"name"] = name;
+  detail[@"summary"] = summary;
+  detail[@"year"] = year;
+  detail[@"score"] = score;
+  detail[@"duration"] = duration;
+  detail[@"genres"] = genres;
+  detail[@"director"] = director;
+  detail[@"actors"] = actors;
+  detail[@"poster"] = [self posterFromAsset:assetData];
+  detail[@"backdrop"] = [self backdropFromAsset:assetData];
+  detail[@"landscape"] = [self landscapeFromAsset:assetData];
+  detail[@"series"] = @(series);
+  detail[@"kind"] = series ? @"serie" : @"película";
+
   NSMutableArray *episodes = [NSMutableArray array];
-  NSArray *episodeList = response[@"episodeList"];
+  NSArray *episodeList = assetData[@"simpleProgramList"];
   if ([episodeList isKindOfClass:[NSArray class]]) {
+    NSUInteger position = 0;
     for (id item in episodeList) {
+      position++;
       if (![item isKindOfClass:[NSDictionary class]]) {
         continue;
       }
@@ -215,16 +353,23 @@
       if (episodeId.length == 0) {
         continue;
       }
+      NSString *episodeName = [self textValue:entry[@"name"]];
+      if (episodeName.length == 0) {
+        episodeName = episodeId;
+      }
+      NSString *episodeDuration = [self textValue:entry[@"duration"]] ?: @"";
+      NSString *episodeQuality = [self textValue:entry[@"quality"]] ?: @"";
       [episodes addObject:@{ @"id" : episodeId,
-                             @"name" : [self textValue:entry[@"name"]] ?: episodeId,
-                             @"number" : entry[@"episodeNumber"] ?: @0,
-                             @"duration" : entry[@"duration"] ?: @0 }];
+                             @"name" : episodeName,
+                             @"number" : @(position),
+                             @"duration" : episodeDuration,
+                             @"quality" : episodeQuality }];
     }
   }
   detail[@"episodes"] = episodes;
 
   NSMutableArray *seasons = [NSMutableArray array];
-  NSArray *seasonList = response[@"sameSeasonSeriesList"];
+  NSArray *seasonList = assetData[@"sameSeasonSeriesList"];
   if ([seasonList isKindOfClass:[NSArray class]]) {
     for (id item in seasonList) {
       if (![item isKindOfClass:[NSDictionary class]]) {
@@ -236,7 +381,8 @@
         continue;
       }
       [seasons addObject:@{ @"id" : seasonId,
-                            @"name" : [self textValue:entry[@"name"]] ?: seasonId }];
+                            @"name" : [self textValue:entry[@"name"]] ?: seasonId,
+                            @"number" : entry[@"seasonNumber"] ?: @0 }];
     }
   }
   detail[@"seasons"] = seasons;
@@ -439,7 +585,6 @@
   if (![cdnList isKindOfClass:[NSArray class]]) {
     return @[];
   }
-
   NSMutableArray *result = [NSMutableArray array];
   NSMutableSet *seenHosts = [NSMutableSet set];
 
@@ -489,7 +634,7 @@
         if (!usable) {
           continue;
         }
-        for (NSString *host in hosts) {
+        for (id host in hosts) {
           if ([seenHosts containsObject:host]) {
             continue;
           }

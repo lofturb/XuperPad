@@ -11,6 +11,9 @@
 /// Titulos de una columna: devuelve objetos con id, nombre, caratula y resumen.
 + (NSArray *)titlesFromColumnResponse:(NSDictionary *)response;
 
+/// Filas de una columna con su nombre de seccion.
++ (NSArray *)sectionsFromColumnResponse:(NSDictionary *)response;
+
 /// Titulos de una busqueda por nombre.
 + (NSArray *)titlesFromSearchResponse:(NSDictionary *)response;
 

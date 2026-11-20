@@ -3,7 +3,7 @@
 //
 
 #import "XPAppDelegate.h"
-#import "XPCatalogViewController.h"
+#import "XPRootViewController.h"
 #import "XPSeedPool.h"
 
 @implementation XPAppDelegate
@@ -12,32 +12,12 @@
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
   self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+  self.window.backgroundColor = [UIColor blackColor];
 
-  XPCatalogViewController *catalog = [[XPCatalogViewController alloc] init];
-  catalog.screenTitle = @"XuperPad";
-  UINavigationController *catalogNavigation =
-      [[UINavigationController alloc] initWithRootViewController:catalog];
-
-  XPCatalogViewController *live = [[XPCatalogViewController alloc] init];
-  live.screenTitle = @"TV en vivo";
-  live.showsLiveChannels = YES;
-  UINavigationController *liveNavigation =
-      [[UINavigationController alloc] initWithRootViewController:live];
-
-  catalogNavigation.tabBarItem =
-      [[UITabBarItem alloc] initWithTitle:@"Catalogo"
-                                    image:nil
-                                      tag:0];
-  liveNavigation.tabBarItem =
-      [[UITabBarItem alloc] initWithTitle:@"TV en vivo"
-                                    image:nil
-                                      tag:1];
-
-  UITabBarController *tabs = [[UITabBarController alloc] init];
-  tabs.viewControllers = @[ catalogNavigation, liveNavigation ];
-
-  self.window.rootViewController = tabs;
+  self.window.rootViewController = [[XPRootViewController alloc] init];
   [self.window makeKeyAndVisible];
+
+  [application setStatusBarStyle:UIStatusBarStyleLightContent];
 
   [[XPSeedPool sharedPool] refreshWithCompletion:^(NSUInteger availableCount) {
     NSLog(@"[XuperPad] credenciales anonimas disponibles: %lu",

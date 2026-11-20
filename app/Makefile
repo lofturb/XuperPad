@@ -14,7 +14,17 @@ XuperPad_FILES = main.m \
 	Classes/XPPortalParser.m \
 	Classes/XPPortalClient.m \
 	Classes/XPStreamResolver.m \
-	Classes/XPTitleCell.m \
+	Classes/XPTheme.m \
+	Classes/XPImageCache.m \
+	Classes/XPButton.m \
+	Classes/XPChipButton.m \
+	Classes/XPSearchField.m \
+	Classes/XPCardCell.m \
+	Classes/XPSectionHeaderView.m \
+	Classes/XPStatusView.m \
+	Classes/XPTabBar.m \
+	Classes/XPBackControl.m \
+	Classes/XPRootViewController.m \
 	Classes/XPCatalogViewController.m \
 	Classes/XPDetailViewController.m \
 	Classes/XPPlayerViewController.m \

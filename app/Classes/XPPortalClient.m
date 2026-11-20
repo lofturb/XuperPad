@@ -184,9 +184,9 @@ static NSTimeInterval const XPPortalTimeout = 18;
                                      @"portalCode" : code ?: @"unknown" }];
 }
 
-- (void)fetchTitlesForColumn:(NSString *)columnCode
-                        page:(NSUInteger)page
-                  completion:(XPTitleListCompletion)completion
+- (void)fetchSectionsForColumn:(NSString *)columnCode
+                           page:(NSUInteger)page
+                     completion:(void (^)(NSArray *sections, NSError *error))completion
 {
   NSDictionary *parameters = @{ @"columnCode" : columnCode ?: XPColumnFeatured,
                                 @"pageNum" : @(page),
@@ -202,7 +202,36 @@ static NSTimeInterval const XPPortalTimeout = 18;
       return;
     }
     if (completion != nil) {
-      completion([XPPortalParser titlesFromColumnResponse:response], nil);
+      completion([XPPortalParser sectionsFromColumnResponse:response], nil);
+    }
+  }];
+}
+
+- (void)fetchTitlesForColumn:(NSString *)columnCode
+                        page:(NSUInteger)page
+                  completion:(XPTitleListCompletion)completion
+{
+  [self fetchSectionsForColumn:columnCode
+                           page:page
+                     completion:^(NSArray *sections, NSError *error) {
+    if (sections == nil) {
+      if (completion != nil) {
+        completion(nil, error);
+      }
+      return;
+    }
+    NSMutableArray *titles = [NSMutableArray array];
+    for (id section in sections) {
+      if (![section isKindOfClass:[NSDictionary class]]) {
+        continue;
+      }
+      NSArray *items = ((NSDictionary *)section)[@"items"];
+      if ([items isKindOfClass:[NSArray class]]) {
+        [titles addObjectsFromArray:items];
+      }
+    }
+    if (completion != nil) {
+      completion(titles, nil);
     }
   }];
 }
@@ -236,8 +265,23 @@ static NSTimeInterval const XPPortalTimeout = 18;
                      isSeries:(BOOL)isSeries
                    completion:(XPTitleDetailCompletion)completion
 {
+  NSString *primaryType = isSeries ? @"0" : @"1";
+  NSString *alternateType = isSeries ? @"1" : @"0";
+  [self fetchDetailForTitle:contentId
+                        type:primaryType
+                 alternateType:alternateType
+                       retried:NO
+                   completion:completion];
+}
+
+- (void)fetchDetailForTitle:(NSString *)contentId
+                        type:(NSString *)callType
+               alternateType:(NSString *)alternateType
+                     retried:(BOOL)retried
+                 completion:(XPTitleDetailCompletion)completion
+{
   NSDictionary *parameters = @{ @"contentId" : contentId ?: @"",
-                                @"type" : isSeries ? @"1" : @"0",
+                                @"type" : callType ?: @"1",
                                 @"sortType" : @"0",
                                 @"language" : @"en",
                                 @"macAddr" : XPFixedMacAddress };
@@ -245,13 +289,28 @@ static NSTimeInterval const XPPortalTimeout = 18;
        parameters:parameters
         completion:^(NSDictionary *response, NSError *error) {
     if (response == nil) {
+      if (!retried && alternateType.length > 0) {
+        [self fetchDetailForTitle:contentId
+                              type:alternateType
+                     alternateType:nil
+                           retried:YES
+                       completion:completion];
+        return;
+      }
       if (completion != nil) {
         completion(nil, error);
       }
       return;
     }
+    NSDictionary *detail = [XPPortalParser detailFromResponse:response];
+    if (detail == nil) {
+      if (completion != nil) {
+        completion(nil, [self errorWithMessage:@"el portal no devolvio el detalle"]);
+      }
+      return;
+    }
     if (completion != nil) {
-      completion([XPPortalParser detailFromResponse:response], nil);
+      completion(detail, nil);
     }
   }];
 }

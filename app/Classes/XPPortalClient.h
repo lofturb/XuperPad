@@ -22,6 +22,11 @@ typedef void (^XPTitleDetailCompletion)(NSDictionary *detail, NSError *error);
                         page:(NSUInteger)page
                   completion:(XPTitleListCompletion)completion;
 
+/// Filas de una columna con el nombre de cada seccion.
+- (void)fetchSectionsForColumn:(NSString *)columnCode
+                           page:(NSUInteger)page
+                     completion:(void (^)(NSArray *sections, NSError *error))completion;
+
 /// Resultados de una busqueda por nombre.
 - (void)searchTitles:(NSString *)text
                  page:(NSUInteger)page
