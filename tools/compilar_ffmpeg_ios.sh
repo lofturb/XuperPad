@@ -366,9 +366,9 @@ cat > "$WORK/prueba.c" <<'EOF'
 #include <libswresample/swresample.h>
 #include <mbedtls/ssl.h>
 
-__typeof__(avformat_open_input) abrir = avformat_open_input;
-__typeof__(sws_scale) escalar = sws_scale;
-__typeof__(swr_convert) convertir = swr_convert;
+__typeof__(&avformat_open_input) abrir = &avformat_open_input;
+__typeof__(&sws_scale) escalar = &sws_scale;
+__typeof__(&swr_convert) convertir = &swr_convert;
 
 int main(void)
 {
