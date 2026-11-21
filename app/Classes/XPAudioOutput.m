@@ -73,7 +73,7 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   format.mBytesPerPacket = channels * 2;
 
   AudioQueueRef created = NULL;
-  OSStatus status = AudioQueueNewPlayer(&format,
+  OSStatus status = AudioQueueNewOutput(&format,
                                         XPAudioQueueCallback,
                                         (__bridge void *)self,
                                         NULL,

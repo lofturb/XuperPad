@@ -32,6 +32,8 @@ static NSString *const XPGLFragmentShader =
   GLint textureUniform;
   GLint textureWidth;
   GLint textureHeight;
+  GLint drawableWidth;
+  GLint drawableHeight;
   NSData *frameData;
   int framePixelWidth;
   int framePixelHeight;
@@ -51,7 +53,7 @@ static NSString *const XPGLFragmentShader =
 
 + (Class)layerClass
 {
-  return [CAEAGLContext class];
+  return [CAEAGLLayer class];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -65,10 +67,18 @@ static NSString *const XPGLFragmentShader =
     framePixelHeight = 0;
     textureWidth = 0;
     textureHeight = 0;
+    drawableWidth = 0;
+    drawableHeight = 0;
     programReady = NO;
+
     EAGLContext *context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
     if (context != nil) {
-      [self.layer setValue:context forKey:@"eaglContext"];
+      CAEAGLLayer *layer = (CAEAGLLayer *)self.layer;
+      layer.opaque = YES;
+      @try {
+        [layer setValue:context forKey:@"eaglContext"];
+      } @catch (NSException *exception) {
+      }
       glContext = context;
     }
   }
@@ -122,8 +132,10 @@ static NSString *const XPGLFragmentShader =
     return;
   }
   [EAGLContext setCurrentContext:context];
-  CGSize size = self.bounds.size;
-  glViewport(0, 0, (GLsizei)size.width, (GLsizei)size.height);
+  if (drawableWidth <= 0 || drawableHeight <= 0) {
+    return;
+  }
+  glViewport(0, 0, drawableWidth, drawableHeight);
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
   NSData *data = frameData;
@@ -160,13 +172,11 @@ static NSString *const XPGLFragmentShader =
 
 - (void)drawQuad
 {
-  CGFloat viewWidth = self.bounds.size.width;
-  CGFloat viewHeight = self.bounds.size.height;
-  if (viewWidth <= 0.0f || viewHeight <= 0.0f) {
+  if (drawableWidth <= 0 || drawableHeight <= 0) {
     return;
   }
   double videoAspect = (double)framePixelWidth / (double)framePixelHeight;
-  double viewAspect = (double)viewWidth / (double)viewHeight;
+  double viewAspect = (double)drawableWidth / (double)drawableHeight;
   double halfWidth = 1.0;
   double halfHeight = 1.0;
   if (videoAspect > viewAspect) {
@@ -220,14 +230,13 @@ static NSString *const XPGLFragmentShader =
     glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer);
     glGenRenderbuffers(1, &colorRenderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, colorRenderbuffer);
-    glRenderbufferStorage(GL_RENDERBUFFER,
-                          GL_RGBA,
-                          (GLsizei)size.width,
-                          (GLsizei)size.height);
+    [context renderbufferStorage:GL_RENDERBUFFER fromDrawable:(CAEAGLLayer *)self.layer];
     glFramebufferRenderbuffer(GL_FRAMEBUFFER,
                               GL_COLOR_ATTACHMENT0,
                               GL_RENDERBUFFER,
                               colorRenderbuffer);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &drawableWidth);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &drawableHeight);
   }
   if (!programReady) {
     programReady = [self setupProgram];
