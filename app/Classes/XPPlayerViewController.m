@@ -671,7 +671,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 
 - (void)setChapterBarVisible:(BOOL)visible
 {
-  self.chapterBarVisible = visible;
+  _chapterBarVisible = visible;
   if (visible) {
     self.chapterBar.hidden = NO;
     [UIView animateWithDuration:0.2 animations:^{

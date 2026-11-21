@@ -41,10 +41,10 @@ typedef struct {
 
 - (void)dealloc
 {
-  if (nativeFrame != NULL) {
-    AVFrame *frame = (AVFrame *)nativeFrame;
+  if (self.nativeFrame != NULL) {
+    AVFrame *frame = (AVFrame *)self.nativeFrame;
     av_frame_free(&frame);
-    nativeFrame = NULL;
+    self.nativeFrame = NULL;
   }
 }
 
