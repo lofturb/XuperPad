@@ -9,7 +9,6 @@
 #import <libavutil/channel_layout.h>
 #import <libavutil/error.h>
 #import <libavutil/log.h>
-#import <libavutil/opt.h>
 #import <libswresample/swresample.h>
 #import <libswscale/swscale.h>
 
@@ -120,10 +119,13 @@ static volatile BOOL XPFFmpegVerbose = NO;
 
 static void XPFFmpegLogCallback(void *context, int level, const char *format, va_list arguments)
 {
-  if (level < AV_LOG_INFO) {
+  if (level == AV_LOG_DEBUG || level == AV_LOG_TRACE) {
     return;
   }
   if (level == AV_LOG_INFO && !XPFFmpegVerbose) {
+    return;
+  }
+  if (level < AV_LOG_ERROR) {
     return;
   }
   char buffer[768];
@@ -163,6 +165,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     latestPTS = 0;
     lastAudioClock = 0;
     lastAudioClockAt = 0;
+    audioClockHealthy = NO;
   }
   return self;
 }
@@ -534,6 +537,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     [self setFailureDetail:@"no se pudieron copiar los parametros de video"];
     return NO;
   }
+  videoContext->pkt_timebase = format->streams[state->videoIndex]->time_base;
   videoContext->thread_count = 2;
   videoContext->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
   videoContext->flags2 |= AV_CODEC_FLAG2_FAST;
@@ -546,13 +550,15 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   NSString *videoCodecName = videoCodec->name != NULL
                                ? [NSString stringWithUTF8String:videoCodec->name]
                                : @"desconocido";
-  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %lld hilos %d",
+  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %lld hilos %d base %d/%d",
         videoCodecName,
         videoContext->width,
         videoContext->height,
         (int)videoContext->pix_fmt,
         (long long)videoContext->bit_rate,
-        videoContext->thread_count);
+        videoContext->thread_count,
+        videoContext->pkt_timebase.num,
+        videoContext->pkt_timebase.den);
 
   AVCodec *audioCodec = NULL;
   state->audioIndex = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0);
@@ -579,6 +585,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     avcodec_free_context(&audioContext);
     return;
   }
+  audioContext->pkt_timebase = state->format->streams[state->audioIndex]->time_base;
   audioContext->thread_count = 1;
   if (avcodec_open2(audioContext, audioCodec, NULL) < 0) {
     avcodec_free_context(&audioContext);
@@ -588,10 +595,13 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   NSString *audioCodecName = audioCodec->name != NULL
                                ? [NSString stringWithUTF8String:audioCodec->name]
                                : @"desconocido";
-  NSLog(@"[XuperPad] decodificador: audio %@ %d Hz canales %d",
+  NSLog(@"[XuperPad] decodificador: audio %@ %d Hz canales %d formato %d base %d/%d",
         audioCodecName,
         audioContext->sample_rate,
-        audioContext->channels);
+        audioContext->channels,
+        (int)audioContext->sample_fmt,
+        audioContext->pkt_timebase.num,
+        audioContext->pkt_timebase.den);
 
   int64_t inputLayout = audioContext->channel_layout;
   if (inputLayout == 0 && audioContext->channels > 0) {
@@ -601,15 +611,24 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     NSLog(@"[XuperPad] decodificador: el audio no tiene disposicion de canales utilizable");
     return;
   }
-  SwrContext *resample = swr_alloc();
+  if (audioContext->sample_fmt == AV_SAMPLE_FMT_NONE) {
+    NSLog(@"[XuperPad] decodificador: el audio no tiene formato de muestra utilizable");
+    return;
+  }
+  int outputRate = audioContext->sample_rate > 0 ? audioContext->sample_rate : 44100;
+  SwrContext *resample = swr_alloc_set_opts(NULL,
+                                             AV_CH_LAYOUT_STEREO,
+                                             AV_SAMPLE_FMT_S16,
+                                             outputRate,
+                                             inputLayout,
+                                             (enum AVSampleFormat)audioContext->sample_fmt,
+                                             audioContext->sample_rate,
+                                             0,
+                                             NULL);
   if (resample == NULL) {
     NSLog(@"[XuperPad] decodificador: sin memoria para el remuestreador de audio");
     return;
   }
-  av_opt_set_int(resample, "in_channel_layout", inputLayout, 0);
-  av_opt_set_int(resample, "in_sample_rate", audioContext->sample_rate, 0);
-  av_opt_set_int(resample, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
-  av_opt_set_int(resample, "out_sample_rate", 44100, 0);
   int resampleResult = swr_init(resample);
   if (resampleResult < 0) {
     NSLog(@"[XuperPad] decodificador: swr_init fallo %d %@",
@@ -620,7 +639,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   state->resample = resample;
 
   XPAudioOutput *output = [[XPAudioOutput alloc] init];
-  if ([output startWithSampleRate:44100 channels:2]) {
+  if ([output startWithSampleRate:outputRate channels:2]) {
     audioOutput = output;
     NSLog(@"[XuperPad] decodificador: salida de audio lista");
   } else {
@@ -649,8 +668,10 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     }
     frameCount++;
     if (frameCount == 1) {
-      NSLog(@"[XuperPad] decodificador: primer fotograma %dx%d pix %d",
-            frame->width, frame->height, (int)frame->format);
+      AVRational videoTimeBase = state->format->streams[state->videoIndex]->time_base;
+      NSLog(@"[XuperPad] decodificador: primer fotograma %dx%d pix %d pts %lld base %d/%d",
+            frame->width, frame->height, (int)frame->format,
+            (long long)frame->pts, videoTimeBase.num, videoTimeBase.den);
     }
     int sourceWidth = frame->width;
     int sourceHeight = frame->height;
@@ -723,7 +744,12 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     sws_scale(state->scale, source, frame->linesize, 0, frame->height, destination, strides);
     scaleSeconds += CFAbsoluteTimeGetCurrent() - scaleStart;
 
-    double pts = (frame->pts == AV_NOPTS_VALUE) ? 0 : frame->pts * av_q2d(state->video->time_base);
+    int64_t timestamp = frame->pts;
+    if (timestamp == AV_NOPTS_VALUE) {
+      timestamp = frame->best_effort_timestamp;
+    }
+    AVRational videoTimeBase = state->format->streams[state->videoIndex]->time_base;
+    double pts = (timestamp == AV_NOPTS_VALUE) ? 0 : timestamp * av_q2d(videoTimeBase);
     if (pts > latestPTS) {
       latestPTS = pts;
     }
@@ -768,9 +794,14 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
                                     source,
                                     frame->nb_samples);
         if (converted > 0) {
-          double audioPTS = (frame->pts == AV_NOPTS_VALUE)
+          int64_t audioTimestamp = frame->pts;
+          if (audioTimestamp == AV_NOPTS_VALUE) {
+            audioTimestamp = frame->best_effort_timestamp;
+          }
+          AVRational audioTimeBase = state->format->streams[state->audioIndex]->time_base;
+          double audioPTS = (audioTimestamp == AV_NOPTS_VALUE)
                           ? 0
-                          : frame->pts * av_q2d(state->audio->time_base);
+                          : audioTimestamp * av_q2d(audioTimeBase);
           if (!hasAudioStart) {
             hasAudioStart = YES;
             audioStartPTS = audioPTS;
