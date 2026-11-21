@@ -2,6 +2,7 @@
 
 #import <AudioToolbox/AudioToolbox.h>
 #import <AVFoundation/AVFoundation.h>
+#import <stdlib.h>
 #import <string.h>
 
 static const int XPAudioBufferFrames = 1024;
@@ -26,7 +27,7 @@ static const int XPAudioBufferCount = 16;
 }
 
 - (AudioQueueBufferRef)takeFreeBuffer;
-- (void)returnBuffer:(AudioQueueBufferRef)buffer;
+- (void)returnBuffer:(AudioQueueBufferRef)buffer queue:(AudioQueueRef)audioQueue;
 - (void)startQueueIfNeeded;
 
 @end
@@ -34,7 +35,7 @@ static const int XPAudioBufferCount = 16;
 static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, AudioQueueBufferRef buffer)
 {
   XPAudioOutput *output = (__bridge XPAudioOutput *)userData;
-  [output returnBuffer:buffer];
+  [output returnBuffer:buffer queue:audioQueue];
 }
 
 @implementation XPAudioOutput
@@ -80,6 +81,7 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     sessionError = nil;
   }
   [session setActive:YES error:&sessionError];
+  BOOL sessionActivated = sessionError == nil;
   if (sessionError != nil) {
     NSLog(@"[XuperPad] audio: no se pudo activar la sesion (%@)", sessionError.localizedDescription);
     sessionError = nil;
@@ -90,7 +92,7 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     [routeNames addObject:[NSString stringWithFormat:@"%@ %@", output.portType, output.portName]];
   }
   NSLog(@"[XuperPad] audio: sesion activa %d tasa %.0f canales %u volumen %.2f salidas %@",
-        (int)session.isActive,
+        (int)sessionActivated,
         session.sampleRate,
         (unsigned int)session.outputNumberOfChannels,
         (float)session.outputVolume,
@@ -120,7 +122,13 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   }
   queue = created;
   UInt32 metering = 1;
-  AudioQueueSetProperty(queue, kAudioQueueProperty_Metering, &metering, sizeof(metering));
+  OSStatus meteringStatus = AudioQueueSetProperty(queue,
+                                                  kAudioQueueProperty_EnableLevelMetering,
+                                                  &metering,
+                                                  sizeof(metering));
+  if (meteringStatus != noErr) {
+    NSLog(@"[XuperPad] audio: no se pudo activar el medidor (%d)", (int)meteringStatus);
+  }
 
   UInt32 capacity = (UInt32)(XPAudioBufferFrames * channels * 2);
   for (int index = 0; index < XPAudioBufferCount; index++) {
@@ -212,25 +220,42 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   return buffer;
 }
 
-- (void)returnBuffer:(AudioQueueBufferRef)buffer
+- (void)returnBuffer:(AudioQueueBufferRef)buffer queue:(AudioQueueRef)audioQueue
 {
   if (buffer == NULL) {
     return;
   }
   UInt32 played = buffer->mAudioDataByteSize;
-  AudioQueueLevelMetering level;
-  UInt32 levelSize = sizeof(level);
+  float peak = 0;
+  float average = 0;
   BOOL hasLevel = NO;
-  if (audioQueue != NULL &&
-      AudioQueueGetProperty(audioQueue, kAudioQueueProperty_CurrentLevel, &level, &levelSize) == noErr) {
-    hasLevel = YES;
+  if (audioQueue != NULL && channelCount > 0) {
+    AudioQueueLevelMeterState *levels = calloc((size_t)channelCount, sizeof(AudioQueueLevelMeterState));
+    if (levels != NULL) {
+      UInt32 levelSize = (UInt32)(sizeof(AudioQueueLevelMeterState) * channelCount);
+      if (AudioQueueGetProperty(audioQueue,
+                                kAudioQueueProperty_CurrentLevelMeterDB,
+                                levels,
+                                &levelSize) == noErr) {
+        for (int index = 0; index < channelCount; index++) {
+          if (levels[index].mPeakPower > peak) {
+            peak = levels[index].mPeakPower;
+          }
+          if (levels[index].mAveragePower > average) {
+            average = levels[index].mAveragePower;
+          }
+        }
+        hasLevel = YES;
+      }
+      free(levels);
+    }
   }
   [stateCondition lock];
   if (active) {
     callbacks++;
     if (hasLevel) {
-      meterPeak = level.mPeakPower;
-      meterAverage = level.mAveragePower;
+      meterPeak = peak;
+      meterAverage = average;
     }
     samplesPlayed += (long long)(played / (UInt32)(2 * channelCount));
     buffer->mAudioDataByteSize = (UInt32)(XPAudioBufferFrames * channelCount * 2);
