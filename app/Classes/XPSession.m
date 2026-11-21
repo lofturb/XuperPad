@@ -10,7 +10,9 @@
 
 static NSString *const XPSessionErrorDomain = @"XPSession";
 static NSTimeInterval const XPSessionSafetyMargin = 300;
-static NSUInteger const XPSessionMaxSeedAttempts = 5;
+static NSTimeInterval const XPSessionMaxAge = 21600;
+static NSUInteger const XPSessionMaxActivationAttempts = 2;
+static NSUInteger const XPSessionMaxSeedAttempts = 3;
 
 @implementation XPSessionState
 @end
@@ -88,21 +90,49 @@ static NSUInteger const XPSessionMaxSeedAttempts = 5;
   }
   self.working = YES;
 
-  /* El portal rechaza la activacion real en regiones bloqueadas
-     (portal100024). El port de referencia resuelve eso adoptando una
-     credencial publicada, por eso se intenta primero esa via. */
-  [self adoptSharedSeedWithCompletion:^(NSDictionary *seedResult, NSError *seedError) {
-    if (seedResult != nil) {
-      [self notifyWaitingWithState:seedResult error:nil];
+  /* El port de referencia activa el dispositivo contra el portal y solo
+     recurre a una credencial publicada cuando la activacion real falla por
+     red o por bloqueo regional. Las credenciales publicadas estan atadas a
+     la IP que las acuño, asi que adoptarlas primero deja al portal
+     respondiendo aaa100083 (cuenta abierta en otro dispositivo). */
+  [self activateFreshSessionWithAttempt:0 completion:^(NSDictionary *fresh, NSError *freshError) {
+    if (fresh != nil) {
+      [self notifyWaitingWithState:fresh error:nil];
       return;
     }
-    [self createFreshSessionWithCompletion:^(NSDictionary *result, NSError *error) {
-      if (result != nil) {
-        [self notifyWaitingWithState:result error:nil];
+    NSLog(@"[XuperPad] sesion: activacion real no disponible (%@), se prueban credenciales publicadas",
+          [freshError localizedDescription] ?: @"sin detalle");
+    [self adoptSharedSeedWithCompletion:^(NSDictionary *seedResult, NSError *seedError) {
+      if (seedResult != nil) {
+        [self notifyWaitingWithState:seedResult error:nil];
         return;
       }
-      [self notifyWaitingWithState:nil error:(error ?: seedError)];
+      [self notifyWaitingWithState:nil error:(freshError ?: seedError)];
     }];
+  }];
+}
+
+- (void)activateFreshSessionWithAttempt:(NSUInteger)attempt
+                              completion:(void (^)(NSDictionary *, NSError *))completion
+{
+  [self createFreshSessionWithCompletion:^(NSDictionary *result, NSError *error) {
+    if (result != nil) {
+      if (completion != nil) {
+        completion(result, nil);
+      }
+      return;
+    }
+    NSString *code = error.userInfo[@"portalCode"];
+    BOOL networkFailure = (code == nil || [code isEqualToString:@"unknown"]);
+    if (networkFailure && attempt + 1 < XPSessionMaxActivationAttempts) {
+      NSLog(@"[XuperPad] sesion: activacion real fallo por red (%@), se reintenta",
+            [error localizedDescription] ?: @"sin detalle");
+      [self activateFreshSessionWithAttempt:attempt + 1 completion:completion];
+      return;
+    }
+    if (completion != nil) {
+      completion(nil, error);
+    }
   }];
 }
 
@@ -116,35 +146,61 @@ static NSUInteger const XPSessionMaxSeedAttempts = 5;
   }
 }
 
+- (NSString *)randomMacAddress
+{
+  NSString *raw = [XPCrypto randomHexStringOfByteCount:6];
+  NSMutableArray *pieces = [NSMutableArray array];
+  for (NSUInteger index = 0; index + 1 < raw.length; index += 2) {
+    [pieces addObject:[raw substringWithRange:NSMakeRange(index, 2)]];
+  }
+  return [pieces componentsJoinedByString:@":"];
+}
+
 - (NSDictionary *)buildFingerprint
 {
-  return @{ @"deviceId" : [XPCrypto md5HexOfString:
-                            [XPCrypto randomHexStringOfByteCount:8]],
-            @"deviceType" : @"phone",
-            @"osVersion" : @"9",
-            @"osBuild" : @"1",
-            @"channelId" : @"10001",
-            @"androidId" : [XPCrypto randomHexStringOfByteCount:8],
-            @"cpuId" : [XPCrypto randomHexStringOfByteCount:8],
-            @"serialNumber" : [XPCrypto randomHexStringOfByteCount:8],
-            @"androidVersion" : @"9",
-            @"phoneType" : @"unknown",
-            @"brand" : @"google",
-            @"phoneModel" : @"sdk_gphone64_arm64",
-            @"protocolVersion" : @"1.0",
-            @"cpuType" : @"arm64-v8a",
-            @"appVersion" : XPClientAppVersion,
-            @"systemVersion" : XPClientPackageVersion };
+  NSMutableDictionary *fingerprint = [NSMutableDictionary dictionary];
+  [fingerprint setObject:@"goldfish_arm64" forKey:@"board"];
+  [fingerprint setObject:@"google" forKey:@"brand"];
+  [fingerprint setObject:@"arm64-v8a" forKey:@"cpuAbi"];
+  [fingerprint setObject:@"emu64a" forKey:@"device"];
+  [fingerprint setObject:@"8GB" forKey:@"diskInfo"];
+  [fingerprint setObject:@"sdk_gphone64_arm64" forKey:@"display"];
+  [fingerprint setObject:@"google/sdk_gphone64_arm64/emu64a:14/UE1A.230829.036/11228894:user/release-keys"
+                  forKey:@"fingerprint"];
+  [fingerprint setObject:@"ranchu" forKey:@"hardware"];
+  [fingerprint setObject:@"abfarm" forKey:@"host"];
+  [fingerprint setObject:@"Google" forKey:@"manufacturer"];
+  [fingerprint setObject:@"4GB" forKey:@"ramSize"];
+  [fingerprint setObject:@"8GB" forKey:@"romSize"];
+  [fingerprint setObject:@"release-keys" forKey:@"tags"];
+  [fingerprint setObject:@"" forKey:@"verId"];
+  [fingerprint setObject:[XPCrypto md5HexOfString:
+                          [XPCrypto randomHexStringOfByteCount:8]]
+                  forKey:@"deviceId"];
+  [fingerprint setObject:@"phone" forKey:@"deviceType"];
+  [fingerprint setObject:@"9" forKey:@"osVersion"];
+  [fingerprint setObject:@"1" forKey:@"osBuild"];
+  [fingerprint setObject:@"10001" forKey:@"channelId"];
+  [fingerprint setObject:[XPCrypto randomHexStringOfByteCount:8] forKey:@"androidId"];
+  [fingerprint setObject:[XPCrypto randomHexStringOfByteCount:8] forKey:@"cpuId"];
+  [fingerprint setObject:[XPCrypto randomHexStringOfByteCount:8] forKey:@"serialNumber"];
+  [fingerprint setObject:@"9" forKey:@"androidVersion"];
+  [fingerprint setObject:@"unknown" forKey:@"phoneType"];
+  [fingerprint setObject:@"sdk_gphone64_arm64" forKey:@"phoneModel"];
+  [fingerprint setObject:@"1.0" forKey:@"protocolVersion"];
+  [fingerprint setObject:@"arm64-v8a" forKey:@"cpuType"];
+  [fingerprint setObject:XPClientAppVersion forKey:@"appVersion"];
+  [fingerprint setObject:XPClientPackageVersion forKey:@"systemVersion"];
+  [fingerprint setObject:[self randomMacAddress] forKey:@"etheMac"];
+  [fingerprint setObject:[self randomMacAddress] forKey:@"gatewayMac"];
+  [fingerprint setObject:[self randomMacAddress] forKey:@"wifiMac"];
+  return fingerprint;
 }
 
 - (void)createFreshSessionWithCompletion:(void (^)(NSDictionary *, NSError *))completion
 {
-  NSString *seed = [XPCrypto randomHexStringOfByteCount:16];
-  NSMutableDictionary *parameters = [[self deviceParametersWithSeed:seed] mutableCopy];
+  NSMutableDictionary *parameters = [[self deviceParametersWithSeed:@""] mutableCopy];
   [parameters addEntriesFromDictionary:[self buildFingerprint]];
-  [parameters setObject:[XPCrypto randomHexStringOfByteCount:6] forKey:@"etheMac"];
-  [parameters setObject:[XPCrypto randomHexStringOfByteCount:6] forKey:@"gatewayMac"];
-  [parameters setObject:[XPCrypto randomHexStringOfByteCount:6] forKey:@"wifiMac"];
 
   [self callPortalPath:@"v3/snToken"
             parameters:parameters
@@ -193,7 +249,7 @@ static NSUInteger const XPSessionMaxSeedAttempts = 5;
       state.seed = resolvedSeed;
       state.userIdentifier = userIdentifier;
       state.userToken = userToken;
-      state.expiresAt = [[NSDate date] timeIntervalSince1970] + 3600;
+      state.expiresAt = [[NSDate date] timeIntervalSince1970] + XPSessionMaxAge;
       state.fromSharedSeed = NO;
       self.state = state;
       NSLog(@"[XuperPad] sesion: creada desde cero");

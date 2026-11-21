@@ -127,14 +127,16 @@ static NSUInteger const XPPortalMaxAttempts = 4;
         NSString *message = XPPortalErrorMessage(returnCode, envelope[@"errorMessage"]);
         BOOL canRetry = (attempt + 1) < XPPortalMaxAttempts;
         if (canRetry && [XPSessionDeadErrorCodes() containsObject:returnCode]) {
-          NSLog(@"[XuperPad] portal %@ sesion muerta, se renueva y se reintenta", path);
+          NSLog(@"[XuperPad] portal %@ sesion muerta (%@), se renueva y se reintenta",
+                path, returnCode);
           [[XPSession sharedSession] invalidateSharedSeed];
           [self callPath:path parameters:parameters attempt:attempt + 1 completion:completion];
           return;
         }
         if (canRetry && [returnCode isEqualToString:XPGeoBlockedErrorCode]) {
-          NSLog(@"[XuperPad] portal %@ bloqueo geografico, se reintenta", path);
-          [[XPSession sharedSession] invalidate];
+          NSLog(@"[XuperPad] portal %@ bloqueo geografico (%@), se reintenta",
+                path, returnCode);
+          [[XPSession sharedSession] invalidateSharedSeed];
           [self callPath:path parameters:parameters attempt:attempt + 1 completion:completion];
           return;
         }

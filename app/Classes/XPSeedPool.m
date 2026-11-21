@@ -5,8 +5,10 @@
 #import "XPSeedPool.h"
 #import "XPTransport.h"
 
+#import <stdlib.h>
+
 static NSString *const XPSeedFileName = @"xuper-seeds.json";
-static NSTimeInterval const XPSeedSafetyMargin = 120;
+static NSTimeInterval const XPSeedSafetyMargin = 300;
 
 @implementation XPSeedEntry
 
@@ -265,6 +267,7 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
 - (XPSeedEntry *)usableSeed
 {
   NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  NSMutableArray *usable = [NSMutableArray array];
   for (XPSeedEntry *entry in self.entries) {
     if (entry.expiresAt - XPSeedSafetyMargin <= now) {
       continue;
@@ -272,9 +275,13 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
     if ([self.exhausted containsObject:entry.seed]) {
       continue;
     }
-    return entry;
+    [usable addObject:entry];
   }
-  return nil;
+  if (usable.count == 0) {
+    return nil;
+  }
+  NSUInteger index = (NSUInteger)arc4random_uniform((uint32_t)usable.count);
+  return usable[index];
 }
 
 - (void)markSeedAsExhausted:(NSString *)seed
