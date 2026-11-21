@@ -163,7 +163,10 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     if (paused) {
       AudioQueuePause(queue);
     } else {
-      AudioQueueResume(queue);
+      OSStatus status = AudioQueueStart(queue, NULL);
+      if (status != noErr) {
+        NSLog(@"[XuperPad] audio: no se pudo reanudar la cola (%d)", (int)status);
+      }
     }
   }
   [queueLock unlock];
