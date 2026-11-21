@@ -397,8 +397,11 @@ static int XPInterruptCallback(void *opaque)
     return NO;
   }
   state->video = videoContext;
+  NSString *videoCodecName = videoCodec->name != NULL
+                               ? [NSString stringWithUTF8String:videoCodec->name]
+                               : @"desconocido";
   NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %d hilos %d",
-        videoCodec->name ?: @"desconocido",
+        videoCodecName,
         videoContext->width,
         videoContext->height,
         (int)videoContext->pix_fmt,
@@ -436,8 +439,11 @@ static int XPInterruptCallback(void *opaque)
     return;
   }
   state->audio = audioContext;
+  NSString *audioCodecName = audioCodec->name != NULL
+                               ? [NSString stringWithUTF8String:audioCodec->name]
+                               : @"desconocido";
   NSLog(@"[XuperPad] decodificador: audio %@ %d Hz canales %d",
-        audioCodec->name ?: @"desconocido",
+        audioCodecName,
         audioContext->sample_rate,
         audioContext->channels);
 
