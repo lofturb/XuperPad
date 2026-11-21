@@ -366,18 +366,19 @@ cat > "$WORK/prueba.c" <<'EOF'
 #include <libswresample/swresample.h>
 #include <mbedtls/ssl.h>
 
+__typeof__(avformat_open_input) abrir = avformat_open_input;
+__typeof__(sws_scale) escalar = sws_scale;
+__typeof__(swr_convert) convertir = swr_convert;
+
 int main(void)
 {
-    volatile __typeof__(avformat_open_input) abrir = avformat_open_input;
-    volatile __typeof__(sws_scale) escalar = sws_scale;
-    volatile __typeof__(swr_convert) convertir = swr_convert;
     const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
     AVFormatContext *formato = avformat_alloc_context();
     mbedtls_ssl_context ssl;
 
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_free(&ssl);
-    avformat_free_context(&formato);
+    avformat_free_context(formato);
 
     return (codec != NULL && formato != NULL && abrir != NULL && escalar != NULL && convertir != NULL) ? 0 : 1;
 }
