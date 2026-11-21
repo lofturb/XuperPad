@@ -400,12 +400,12 @@ static int XPInterruptCallback(void *opaque)
   NSString *videoCodecName = videoCodec->name != NULL
                                ? [NSString stringWithUTF8String:videoCodec->name]
                                : @"desconocido";
-  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %d hilos %d",
+  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %lld hilos %d",
         videoCodecName,
         videoContext->width,
         videoContext->height,
         (int)videoContext->pix_fmt,
-        videoContext->bit_rate,
+        (long long)videoContext->bit_rate,
         videoContext->thread_count);
 
   AVCodec *audioCodec = NULL;
