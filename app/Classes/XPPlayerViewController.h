@@ -23,6 +23,12 @@
 /// Tipo de contenido declarado por el portal.
 @property (nonatomic, copy) NSString *streamType;
 
+/// Codificacion de video declarada por el portal.
+@property (nonatomic, copy) NSString *streamCodec;
+
+/// Formato del archivo de video declarado por el portal.
+@property (nonatomic, copy) NSString *streamFormat;
+
 /// Crea el reproductor con los datos de una direccion resuelta.
 + (instancetype)playerWithStream:(NSDictionary *)stream;
 

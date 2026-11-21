@@ -7,19 +7,26 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AVKit/AVKit.h>
 
+#import "XPDecoder.h"
+#import "XPGLView.h"
 #import "XPStatusView.h"
 #import "XPBackControl.h"
 #import "XPTheme.h"
 
-@interface XPPlayerViewController ()
+static const NSTimeInterval XPPlayerStartTimeout = 25.0;
+
+@interface XPPlayerViewController () <XPDecoderDelegate>
 @property (nonatomic, strong) AVPlayer *player;
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
+@property (nonatomic, strong) XPGLView *glView;
+@property (nonatomic, strong) XPDecoder *decoder;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) XPStatusView *statusView;
 @property (nonatomic, strong) XPBackControl *backControl;
 @property (nonatomic, assign) NSUInteger currentIndex;
 @property (nonatomic, strong) NSMutableArray *addressQueue;
 @property (nonatomic, assign) BOOL observing;
+@property (nonatomic, strong) NSTimer *startTimeout;
 @end
 
 @implementation XPPlayerViewController
@@ -31,6 +38,8 @@
   controller.streamAddress = stream[@"url"];
   controller.streamHeaders = stream[@"headers"];
   controller.streamType = stream[@"mime"];
+  controller.streamCodec = stream[@"codec"];
+  controller.streamFormat = stream[@"format"];
   NSArray *backups = stream[@"backupUrls"];
   controller.backupAddresses = [backups isKindOfClass:[NSArray class]] ? backups : @[];
   return controller;
@@ -45,6 +54,10 @@
   self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:nil];
   self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
   [self.view.layer addSublayer:self.playerLayer];
+
+  self.glView = [[XPGLView alloc] initWithFrame:self.view.bounds];
+  self.glView.hidden = YES;
+  [self.view addSubview:self.glView];
 
   self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
   self.titleLabel.font = XPFontMedium(13.0f);
@@ -70,10 +83,19 @@
   };
   [self.view addSubview:self.statusView];
 
+  self.addressQueue = [self buildAddressQueue];
+
+  [self startPlayback];
+}
+
+- (NSMutableArray *)buildAddressQueue
+{
   NSMutableArray *queue = [NSMutableArray array];
   if (self.streamAddress.length > 0) {
     [queue addObject:@{ @"url" : self.streamAddress,
-                        @"headers" : self.streamHeaders ?: @{} }];
+                        @"headers" : self.streamHeaders ?: @{},
+                        @"codec" : self.streamCodec ?: @"",
+                        @"format" : self.streamFormat ?: @"" }];
   }
   for (id item in self.backupAddresses) {
     if ([item isKindOfClass:[NSDictionary class]]) {
@@ -81,16 +103,18 @@
       NSString *address = entry[@"url"];
       if ([address isKindOfClass:[NSString class]] && address.length > 0) {
         [queue addObject:@{ @"url" : address,
-                            @"headers" : entry[@"headers"] ?: self.streamHeaders ?: @{} }];
+                            @"headers" : entry[@"headers"] ?: self.streamHeaders ?: @{},
+                            @"codec" : entry[@"codec"] ?: self.streamCodec ?: @"",
+                            @"format" : entry[@"format"] ?: self.streamFormat ?: @"" }];
       }
     } else if ([item isKindOfClass:[NSString class]] && [item length] > 0) {
       [queue addObject:@{ @"url" : item,
-                          @"headers" : self.streamHeaders ?: @{} }];
+                          @"headers" : self.streamHeaders ?: @{},
+                          @"codec" : self.streamCodec ?: @"",
+                          @"format" : self.streamFormat ?: @"" }];
     }
   }
-  self.addressQueue = queue;
-
-  [self startPlayback];
+  return queue;
 }
 
 - (BOOL)prefersStatusBarHidden
@@ -105,6 +129,7 @@
   CGFloat height = CGRectGetHeight(self.view.bounds);
 
   self.playerLayer.frame = self.view.bounds;
+  self.glView.frame = self.view.bounds;
   self.statusView.frame = self.view.bounds;
   self.backControl.frame = CGRectMake(12.0f, 12.0f, 34.0f, 34.0f);
   self.titleLabel.frame = CGRectMake(56.0f, 14.0f, MAX(40.0f, width - 68.0f), 30.0f);
@@ -112,8 +137,17 @@
   self.titleLabel.layer.masksToBounds = YES;
 }
 
+- (void)viewWillDisappear:(BOOL)animated
+{
+  [super viewWillDisappear:animated];
+  if (self.isMovingFromParentViewController) {
+    [self stopPlayback];
+  }
+}
+
 - (void)startPlayback
 {
+  [self stopPlayback];
   if (self.currentIndex >= self.addressQueue.count) {
     [self.statusView showMessage:@"No se pudo reproducir el contenido." retry:YES];
     return;
@@ -121,32 +155,137 @@
 
   NSDictionary *entry = self.addressQueue[self.currentIndex];
   NSString *address = entry[@"url"];
+  if (![address isKindOfClass:[NSString class]] || address.length == 0) {
+    [self currentIndexDidFail];
+    return;
+  }
+  NSDictionary *headers = entry[@"headers"];
+  if (![headers isKindOfClass:[NSDictionary class]]) {
+    headers = @{};
+  }
+
+  [self.statusView showLoading];
+
+  if ([self needsSoftwareDecoderForEntry:entry]) {
+    [self startSoftwarePlaybackWithAddress:address headers:headers];
+  } else {
+    [self startSystemPlaybackWithAddress:address headers:headers];
+  }
+
+  [self scheduleStartTimeout];
+}
+
+- (BOOL)needsSoftwareDecoderForEntry:(NSDictionary *)entry
+{
+  NSString *codec = @"";
+  id rawCodec = entry[@"codec"];
+  if ([rawCodec isKindOfClass:[NSString class]]) {
+    codec = [(NSString *)rawCodec lowercaseString];
+  }
+  if ([codec isEqualToString:@"hevc"] || [codec isEqualToString:@"h265"]) {
+    return YES;
+  }
+  NSString *format = @"";
+  id rawFormat = entry[@"format"];
+  if ([rawFormat isKindOfClass:[NSString class]]) {
+    format = [(NSString *)rawFormat lowercaseString];
+  }
+  if ([format isEqualToString:@"ts"] || [format isEqualToString:@"mpegts"]) {
+    return YES;
+  }
+  NSString *mime = [self.streamType isKindOfClass:[NSString class]]
+                     ? [self.streamType lowercaseString]
+                     : @"";
+  if ([mime isEqualToString:@"video/mp2t"]) {
+    return YES;
+  }
+  return NO;
+}
+
+- (void)startSystemPlaybackWithAddress:(NSString *)address headers:(NSDictionary *)headers
+{
   NSURL *url = [NSURL URLWithString:address];
   if (url == nil) {
     [self currentIndexDidFail];
     return;
   }
 
-  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
-  NSDictionary *headers = entry[@"headers"];
-  NSArray *headerValues = headers.allValues;
-  if (headerValues.count > 0) {
-    NSMutableDictionary *options = [NSMutableDictionary dictionary];
-    [options setObject:headerValues forKey:@"AVURLAssetHTTPHeaderFieldsKey"];
-    asset = [AVURLAsset URLAssetWithURL:url options:options];
+  NSDictionary *options = nil;
+  if (headers.count > 0) {
+    options = @{ @"AVURLAssetHTTPHeaderFieldsKey" : headers };
   }
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:options];
+  AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:asset];
+  AVPlayer *player = [AVPlayer playerWithPlayerItem:item];
 
-  [self.statusView showLoading];
-
-  AVPlayer *player = [AVPlayer playerWithPlayerItem:[AVPlayerItem playerItemWithAsset:asset]];
   self.player = player;
   self.playerLayer.player = player;
+  self.playerLayer.hidden = NO;
+  self.glView.hidden = YES;
+
   [player addObserver:self
            forKeyPath:@"status"
               options:NSKeyValueObservingOptionNew
-              context:nil];
+              context:NULL];
   self.observing = YES;
   [player play];
+}
+
+- (void)startSoftwarePlaybackWithAddress:(NSString *)address headers:(NSDictionary *)headers
+{
+  XPDecoder *decoder = [[XPDecoder alloc] init];
+  decoder.delegate = self;
+  self.decoder = decoder;
+
+  self.playerLayer.hidden = YES;
+  self.glView.hidden = NO;
+  [self.glView clearFrame];
+
+  if (![decoder startWithAddress:address headers:headers]) {
+    [self currentIndexDidFail];
+  }
+}
+
+- (void)scheduleStartTimeout
+{
+  [self.startTimeout invalidate];
+  self.startTimeout = [NSTimer scheduledTimerWithTimeInterval:XPPlayerStartTimeout
+                                                      target:self
+                                                    selector:@selector(startTimeoutFired:)
+                                                    userInfo:nil
+                                                     repeats:NO];
+}
+
+- (void)startTimeoutFired:(NSTimer *)timer
+{
+  self.startTimeout = nil;
+  [self currentIndexDidFail];
+}
+
+- (void)stopPlayback
+{
+  [self.startTimeout invalidate];
+  self.startTimeout = nil;
+
+  if (self.decoder != nil) {
+    [self.decoder stop];
+    self.decoder.delegate = nil;
+    self.decoder = nil;
+  }
+
+  if (self.player != nil) {
+    if (self.observing) {
+      @try {
+        [self.player removeObserver:self forKeyPath:@"status"];
+      } @catch (NSException *exception) {
+      }
+      self.observing = NO;
+    }
+    [self.player pause];
+    self.player = nil;
+  }
+  self.playerLayer.player = nil;
+  [self.glView clearFrame];
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -154,11 +293,14 @@
                          change:(NSDictionary *)change
                         context:(void *)context
 {
-  if (![keyPath isEqualToString:@"status"]) {
+  if (![keyPath isEqualToString:@"status"] || object != self.player) {
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
     return;
   }
   AVPlayer *player = (AVPlayer *)object;
   if (player.status == AVPlayerStatusReadyToPlay) {
+    [self.startTimeout invalidate];
+    self.startTimeout = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
       [self.statusView hideStatus];
     });
@@ -174,6 +316,7 @@
     [self startPlayback];
     return;
   }
+  [self stopPlayback];
   [self.statusView showMessage:@"No se pudo reproducir el contenido." retry:YES];
 }
 
@@ -188,17 +331,45 @@
   [self.navigationController popViewControllerAnimated:YES];
 }
 
+- (void)decoder:(XPDecoder *)decoder didOpenVideoWithWidth:(int)width height:(int)height
+{
+  if (decoder != self.decoder) {
+    return;
+  }
+  [self.startTimeout invalidate];
+  self.startTimeout = nil;
+  [self.statusView hideStatus];
+}
+
+- (void)decoder:(XPDecoder *)decoder didProduceVideoFrame:(NSData *)rgb width:(int)width height:(int)height
+{
+  if (decoder != self.decoder) {
+    return;
+  }
+  [self.glView displayRGBFrame:rgb width:width height:height];
+}
+
+- (void)decoder:(XPDecoder *)decoder didFailWithMessage:(NSString *)message
+{
+  if (decoder != self.decoder) {
+    return;
+  }
+  NSLog(@"[XuperPad] decodificador: %@", message);
+  [self currentIndexDidFail];
+}
+
+- (void)decoder:(XPDecoder *)decoder didFinishWithMessage:(NSString *)message
+{
+  if (decoder != self.decoder) {
+    return;
+  }
+  [self stopPlayback];
+  [self.statusView showMessage:message ?: @"El contenido ha terminado." retry:NO];
+}
+
 - (void)dealloc
 {
-  if (self.player != nil && self.observing) {
-    @try {
-      [self.player removeObserver:self forKeyPath:@"status"];
-    } @catch (NSException *exception) {
-    }
-    self.observing = NO;
-  }
-  [self.player pause];
-  self.player = nil;
+  [self stopPlayback];
 }
 
 @end

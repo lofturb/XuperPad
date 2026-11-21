@@ -43,14 +43,25 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
       score += 100;
     }
     NSString *codec = track[@"codec"];
-    if (![codec isEqualToString:@"h264"]) {
+    BOOL hardware = [codec isEqualToString:@"h264"];
+    if (!hardware) {
       score += 200;
     }
     NSInteger height = [track[@"height"] integerValue];
-    if (height > 1080) {
-      score += 80;
-    } else if (height > 0 && height < 576) {
-      score += 40;
+    if (hardware) {
+      if (height > 1080) {
+        score += 80;
+      } else if (height > 0 && height < 576) {
+        score += 40;
+      }
+    } else {
+      if (height > 720) {
+        score += 120;
+      } else if (height > 480) {
+        score += 60;
+      } else if (height > 0 && height < 360) {
+        score += 30;
+      }
     }
     NSInteger bitrate = [track[@"bitrate"] integerValue];
     if (bitrate > 9000) {
@@ -160,6 +171,7 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
     NSString *license = licenses.firstObject;
     NSString *trackId = track[@"id"];
     NSString *format = [track[@"format"] isEqualToString:@"ts"] ? @"ts" : @"mp4";
+    NSString *codec = [track[@"codec"] isKindOfClass:[NSString class]] ? track[@"codec"] : @"h264";
 
     [self fetchSlbInfoWithPaths:@[ @"v14/getSlbInfo", @"v15/getSlbInfo" ]
                      parameters:[self slbParameters]
@@ -229,6 +241,8 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
                       @"backupUrls" : backups,
                       @"headers" : primary[@"headers"],
                       @"mime" : mime,
+                      @"codec" : codec,
+                      @"format" : format,
                       @"title" : titleName ?: @"" }, nil);
       }
     }];
@@ -387,6 +401,8 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
                       @"backupUrls" : backups,
                       @"headers" : primary[@"headers"],
                       @"mime" : @"application/x-mpegurl",
+                      @"codec" : @"h264",
+                      @"format" : @"hls",
                       @"title" : titleName ?: @"" }, nil);
       }
     }];

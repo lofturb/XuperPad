@@ -33,9 +33,12 @@ XuperPad_FILES = main.m \
 	Classes/XPCatalogViewController.m \
 	Classes/XPDetailViewController.m \
 	Classes/XPPlayerViewController.m \
+	Classes/XPDecoder.m \
+	Classes/XPGLView.m \
+	Classes/XPAudioOutput.m \
 	Classes/XPAppDelegate.m
 
-XuperPad_FRAMEWORKS = UIKit Foundation CoreGraphics AVFoundation AVKit
+XuperPad_FRAMEWORKS = UIKit Foundation CoreGraphics AVFoundation AVKit AudioToolbox OpenGLES QuartzCore
 
 XuperPad_LIBRARIES = c++abi
 
@@ -46,10 +49,21 @@ endif
 
 XuperPad_CFLAGS = -fobjc-arc -fblocks \
 	-fno-optimize-sibling-calls \
+	-I$(CURDIR)/vendor/ffmpeg/include \
 	-Wno-deprecated-declarations \
 	-Wno-unused-parameter \
 	-Wno-unused-variable \
 	-Wno-unused-function
+
+XuperPad_LDFLAGS = $(CURDIR)/vendor/ffmpeg/lib/libavformat.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libavcodec.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libswscale.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libswresample.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libavutil.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libmbedtls.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libmbedx509.a \
+	$(CURDIR)/vendor/ffmpeg/lib/libmbedcrypto.a \
+	-lm
 
 XuperPad_CODESIGN_FLAGS = -Sentitlements.plist
 
