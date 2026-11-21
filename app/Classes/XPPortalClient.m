@@ -11,6 +11,7 @@
 
 static NSString *const XPPortalClientErrorDomain = @"XPPortalClient";
 static NSTimeInterval const XPPortalTimeout = 18;
+static NSUInteger const XPPortalMaxAttempts = 4;
 
 @interface XPPortalClient ()
 @property (nonatomic, strong) NSMutableDictionary *cache;
@@ -51,12 +52,12 @@ static NSTimeInterval const XPPortalTimeout = 18;
       parameters:(NSDictionary *)parameters
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
-  [self callPath:path parameters:parameters retried:NO completion:completion];
+  [self callPath:path parameters:parameters attempt:0 completion:completion];
 }
 
 - (void)callPath:(NSString *)path
       parameters:(NSDictionary *)parameters
-         retried:(BOOL)retried
+         attempt:(NSUInteger)attempt
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
   [[XPSession sharedSession] ensureSessionWithCompletion:^(NSDictionary *sessionInfo, NSError *sessionError) {
@@ -120,17 +121,21 @@ static NSTimeInterval const XPPortalTimeout = 18;
 
       NSDictionary *envelope = (NSDictionary *)decoded;
       NSString *returnCode = [envelope[@"returnCode"] description];
-      NSLog(@"[XuperPad] portal %@ returnCode %@", path, returnCode);
+      NSLog(@"[XuperPad] portal %@ returnCode %@ intento %lu",
+            path, returnCode, (unsigned long)(attempt + 1));
       if (![returnCode isEqualToString:@"0"]) {
         NSString *message = XPPortalErrorMessage(returnCode, envelope[@"errorMessage"]);
-        if (!retried && [XPSessionDeadErrorCodes() containsObject:returnCode]) {
+        BOOL canRetry = (attempt + 1) < XPPortalMaxAttempts;
+        if (canRetry && [XPSessionDeadErrorCodes() containsObject:returnCode]) {
+          NSLog(@"[XuperPad] portal %@ sesion muerta, se renueva y se reintenta", path);
           [[XPSession sharedSession] invalidateSharedSeed];
-          [self callPath:path parameters:parameters retried:YES completion:completion];
+          [self callPath:path parameters:parameters attempt:attempt + 1 completion:completion];
           return;
         }
-        if (!retried && [returnCode isEqualToString:XPGeoBlockedErrorCode]) {
+        if (canRetry && [returnCode isEqualToString:XPGeoBlockedErrorCode]) {
+          NSLog(@"[XuperPad] portal %@ bloqueo geografico, se reintenta", path);
           [[XPSession sharedSession] invalidate];
-          [self callPath:path parameters:parameters retried:YES completion:completion];
+          [self callPath:path parameters:parameters attempt:attempt + 1 completion:completion];
           return;
         }
         if (completion != nil) {

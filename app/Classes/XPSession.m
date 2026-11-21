@@ -10,6 +10,7 @@
 
 static NSString *const XPSessionErrorDomain = @"XPSession";
 static NSTimeInterval const XPSessionSafetyMargin = 300;
+static NSUInteger const XPSessionMaxSeedAttempts = 5;
 
 @implementation XPSessionState
 @end
@@ -57,6 +58,7 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
     NSString *seed = self.state.seed;
     if (seed.length > 0) {
       [[XPSeedPool sharedPool] markSeedAsExhausted:seed];
+      NSLog(@"[XuperPad] sesion: credencial compartida descartada");
     }
   }
   self.state = nil;
@@ -194,6 +196,7 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
       state.expiresAt = [[NSDate date] timeIntervalSince1970] + 3600;
       state.fromSharedSeed = NO;
       self.state = state;
+      NSLog(@"[XuperPad] sesion: creada desde cero");
       if (completion != nil) {
         completion([self dictionaryFromState:state], nil);
       }
@@ -205,30 +208,53 @@ static NSTimeInterval const XPSessionSafetyMargin = 300;
 {
   XPSeedPool *pool = [XPSeedPool sharedPool];
   [pool refreshWithCompletion:^(NSUInteger availableCount) {
-    XPSeedEntry *entry = [pool usableSeed];
-    if (entry == nil) {
+    [self adoptSeedWithAttempt:0 completion:completion];
+  }];
+}
+
+- (void)adoptSeedWithAttempt:(NSUInteger)attempt
+                   completion:(void (^)(NSDictionary *, NSError *))completion
+{
+  XPSeedPool *pool = [XPSeedPool sharedPool];
+  XPSeedEntry *entry = [pool usableSeed];
+  if (entry == nil) {
+    if (completion != nil) {
+      completion(nil, [self errorWithMessage:@"no hay credenciales anonimas disponibles"]);
+    }
+    return;
+  }
+
+  if (entry.userIdentifier.length > 0 && entry.userToken.length > 0) {
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    XPSessionState *state = [[XPSessionState alloc] init];
+    state.seed = entry.seed;
+    state.userIdentifier = entry.userIdentifier;
+    state.userToken = entry.userToken;
+    state.expiresAt = entry.expiresAt > now + 600 ? entry.expiresAt : now + 600;
+    state.fromSharedSeed = YES;
+    self.state = state;
+    NSLog(@"[XuperPad] sesion: credencial compartida adoptada");
+    if (completion != nil) {
+      completion([self dictionaryFromState:state], nil);
+    }
+    return;
+  }
+
+  [self activateSeed:entry completion:^(NSDictionary *result, NSError *error) {
+    if (result != nil) {
       if (completion != nil) {
-        completion(nil, [self errorWithMessage:@"no hay credenciales anonimas disponibles"]);
+        completion(result, nil);
       }
       return;
     }
-
-    if (entry.userIdentifier.length > 0 && entry.userToken.length > 0) {
-      NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-      XPSessionState *state = [[XPSessionState alloc] init];
-      state.seed = entry.seed;
-      state.userIdentifier = entry.userIdentifier;
-      state.userToken = entry.userToken;
-      state.expiresAt = entry.expiresAt > now + 600 ? entry.expiresAt : now + 600;
-      state.fromSharedSeed = YES;
-      self.state = state;
-      if (completion != nil) {
-        completion([self dictionaryFromState:state], nil);
-      }
+    if (attempt + 1 < XPSessionMaxSeedAttempts) {
+      NSLog(@"[XuperPad] sesion: credencial no activable, se prueba otra");
+      [self adoptSeedWithAttempt:attempt + 1 completion:completion];
       return;
     }
-
-    [self activateSeed:entry completion:completion];
+    if (completion != nil) {
+      completion(nil, error);
+    }
   }];
 }
 

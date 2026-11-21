@@ -51,10 +51,14 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
 @interface XPSeedPool ()
 @property (nonatomic, strong) NSMutableArray *entries;
 @property (nonatomic, strong) NSMutableArray *exhausted;
+@property (nonatomic, strong) NSMutableArray *pending;
 @property (nonatomic, assign) BOOL refreshing;
+@property (nonatomic, assign) NSTimeInterval lastRefreshAt;
 - (void)fetchSeedsAtIndex:(NSUInteger)index
                 completion:(void (^)(NSUInteger))completion;
 - (void)mergeSeedsFromDictionary:(NSDictionary *)decoded;
+- (void)startBackgroundRefresh;
+- (void)notifyPendingWithCount:(NSUInteger)count;
 @end
 
 @implementation XPSeedPool
@@ -75,6 +79,9 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
   if (self) {
     _entries = [NSMutableArray array];
     _exhausted = [NSMutableArray array];
+    _pending = [NSMutableArray array];
+    _refreshing = NO;
+    _lastRefreshAt = 0;
     _refreshInterval = 9 * 60;
     _sourceAddresses = @[
       @"https://raw.githubusercontent.com/cristianco7/XUPER-HYDRA-PORT-WEBOS/seeds/seeds.json",
@@ -135,14 +142,56 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
 
 - (void)refreshWithCompletion:(void (^)(NSUInteger))completion
 {
+  NSUInteger usable = [self usableCount];
+  if (usable > 0) {
+    if (completion != nil) {
+      completion(usable);
+    }
+    [self startBackgroundRefresh];
+    return;
+  }
   if (self.refreshing) {
     if (completion != nil) {
-      completion([self usableCount]);
+      [self.pending addObject:[completion copy]];
     }
     return;
   }
   self.refreshing = YES;
-  [self fetchSeedsAtIndex:0 completion:completion];
+  [self fetchSeedsAtIndex:0 completion:^(NSUInteger count) {
+    self.lastRefreshAt = [[NSDate date] timeIntervalSince1970];
+    self.refreshing = NO;
+    [self notifyPendingWithCount:count];
+    if (completion != nil) {
+      completion(count);
+    }
+  }];
+}
+
+- (void)startBackgroundRefresh
+{
+  if (self.refreshing) {
+    return;
+  }
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  if (self.lastRefreshAt > 0 && now - self.lastRefreshAt < self.refreshInterval) {
+    return;
+  }
+  self.refreshing = YES;
+  [self fetchSeedsAtIndex:0 completion:^(NSUInteger count) {
+    self.lastRefreshAt = [[NSDate date] timeIntervalSince1970];
+    self.refreshing = NO;
+    [self notifyPendingWithCount:count];
+  }];
+}
+
+- (void)notifyPendingWithCount:(NSUInteger)count
+{
+  NSArray *callbacks = [self.pending copy];
+  [self.pending removeAllObjects];
+  for (id item in callbacks) {
+    void (^callback)(NSUInteger) = (void (^)(NSUInteger))item;
+    callback(count);
+  }
 }
 
 - (void)fetchSeedsAtIndex:(NSUInteger)index
@@ -150,7 +199,6 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
 {
   NSArray *addresses = self.sourceAddresses;
   if (index >= addresses.count) {
-    self.refreshing = NO;
     if (completion != nil) {
       completion([self usableCount]);
     }
@@ -177,7 +225,6 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
       return;
     }
     [self mergeSeedsFromDictionary:decoded];
-    self.refreshing = NO;
     if (completion != nil) {
       completion([self usableCount]);
     }
@@ -199,6 +246,12 @@ static NSTimeInterval const XPSeedSafetyMargin = 120;
     for (XPSeedEntry *known in self.entries) {
       if ([known.seed isEqualToString:entry.seed]) {
         alreadyKnown = YES;
+        if (entry.expiresAt > known.expiresAt) {
+          known.userIdentifier = entry.userIdentifier;
+          known.userToken = entry.userToken;
+          known.expiresAt = entry.expiresAt;
+          known.createdAt = entry.createdAt;
+        }
         break;
       }
     }

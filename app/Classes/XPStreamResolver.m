@@ -152,6 +152,19 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
 
     NSArray *tracks = [XPPortalParser tracksFromPlayResponse:response];
     NSLog(@"[XuperPad] vod pistas %lu", (unsigned long)tracks.count);
+    for (id item in tracks) {
+      if (![item isKindOfClass:[NSDictionary class]]) {
+        continue;
+      }
+      NSDictionary *track = (NSDictionary *)item;
+      NSLog(@"[XuperPad] pista %@ codec %@ formato %@ alto %@ bitrate %@ fps %@",
+            track[@"id"],
+            track[@"codec"],
+            track[@"format"],
+            track[@"height"],
+            track[@"bitrate"],
+            track[@"fps"]);
+    }
     if (tracks.count == 0) {
       if (completion != nil) {
         completion(nil, [self errorWithMessage:@"el portal no devolvio pistas de video"]);
@@ -236,6 +249,7 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
       NSLog(@"[XuperPad] vod direcciones %lu respaldo %lu",
             (unsigned long)streams.count,
             (unsigned long)backups.count);
+      NSLog(@"[XuperPad] vod url %@", primary[@"url"]);
       if (completion != nil) {
         completion(@{ @"url" : primary[@"url"],
                       @"backupUrls" : backups,

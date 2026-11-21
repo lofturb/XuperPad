@@ -13,7 +13,7 @@
 #import "XPBackControl.h"
 #import "XPTheme.h"
 
-static const NSTimeInterval XPPlayerStartTimeout = 25.0;
+static const NSTimeInterval XPPlayerStartTimeout = 45.0;
 
 @interface XPPlayerViewController () <XPDecoderDelegate>
 @property (nonatomic, strong) AVPlayer *player;
@@ -166,7 +166,14 @@ static const NSTimeInterval XPPlayerStartTimeout = 25.0;
 
   [self.statusView showLoading];
 
-  if ([self needsSoftwareDecoderForEntry:entry]) {
+  BOOL software = [self needsSoftwareDecoderForEntry:entry];
+  NSLog(@"[XuperPad] reproductor: intento %lu de %lu %@ decodificador %@",
+        (unsigned long)(self.currentIndex + 1),
+        (unsigned long)self.addressQueue.count,
+        address,
+        software ? @"software" : @"sistema");
+
+  if (software) {
     [self startSoftwarePlaybackWithAddress:address headers:headers];
   } else {
     [self startSystemPlaybackWithAddress:address headers:headers];

@@ -6,9 +6,12 @@
 #import <libavcodec/avcodec.h>
 #import <libavformat/avformat.h>
 #import <libavutil/channel_layout.h>
+#import <libavutil/error.h>
 #import <libavutil/opt.h>
 #import <libswresample/swresample.h>
 #import <libswscale/swscale.h>
+
+#import <string.h>
 
 typedef struct {
   AVFormatContext *format;
@@ -49,6 +52,11 @@ typedef struct {
   double videoStartPTS;
   double audioStartPTS;
   double videoWall;
+  NSString *failureDetail;
+  NSUInteger videoPacketCount;
+  NSUInteger audioPacketCount;
+  NSUInteger frameCount;
+  CFAbsoluteTime lastProgressAt;
 }
 
 - (void)decodeLoop;
@@ -66,8 +74,17 @@ typedef struct {
 - (void)reportFailure:(NSString *)message;
 - (void)reportEndOfStream;
 - (void)broadcastFrames;
+- (void)setFailureDetail:(NSString *)detail;
 
 @end
+
+static NSString *XPFFmpegErrorText(int code)
+{
+  char buffer[AV_ERROR_MAX_STRING_SIZE];
+  memset(buffer, 0, sizeof(buffer));
+  av_strerror(code, buffer, sizeof(buffer));
+  return [NSString stringWithUTF8String:buffer] ?: @"desconocido";
+}
 
 static int XPInterruptCallback(void *opaque)
 {
@@ -88,6 +105,11 @@ static int XPInterruptCallback(void *opaque)
     frameCondition = [[NSCondition alloc] init];
     running = NO;
     state = NULL;
+    failureDetail = nil;
+    videoPacketCount = 0;
+    audioPacketCount = 0;
+    frameCount = 0;
+    lastProgressAt = 0;
   }
   return self;
 }
@@ -114,7 +136,13 @@ static int XPInterruptCallback(void *opaque)
   videoStartPTS = 0;
   audioStartPTS = 0;
   videoWall = 0;
+  failureDetail = nil;
+  videoPacketCount = 0;
+  audioPacketCount = 0;
+  frameCount = 0;
+  lastProgressAt = 0;
   running = YES;
+  NSLog(@"[XuperPad] decodificador: inicio %@", address);
 
   NSThread *worker = [[NSThread alloc] initWithTarget:self selector:@selector(decodeLoop) object:nil];
   worker.name = @"XuperPad.decode";
@@ -140,8 +168,10 @@ static int XPInterruptCallback(void *opaque)
 - (void)decodeLoop
 {
   @autoreleasepool {
+    lastProgressAt = CFAbsoluteTimeGetCurrent();
     if (![self openInput]) {
       [self closeInput];
+      NSLog(@"[XuperPad] decodificador: fallo al abrir (%@)", failureDetail ?: @"sin detalle");
       [self reportFailure:@"no se pudo abrir la direccion de video"];
       running = NO;
       [self broadcastFrames];
@@ -156,21 +186,38 @@ static int XPInterruptCallback(void *opaque)
       int result = av_read_frame(state->format, state->packet);
       if (result < 0) {
         ended = (result == AVERROR_EOF);
+        if (!ended) {
+          NSLog(@"[XuperPad] decodificador: av_read_frame fallo %d %@",
+                result, XPFFmpegErrorText(result));
+        }
         break;
       }
       if (state->packet->stream_index == state->videoIndex) {
+        videoPacketCount++;
         [self decodeVideoPacket];
       } else if (state->packet->stream_index == state->audioIndex) {
+        audioPacketCount++;
         [self decodeAudioPacket];
       }
       av_packet_unref(state->packet);
+
+      CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+      if (now - lastProgressAt >= 3.0) {
+        lastProgressAt = now;
+        NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu",
+              (unsigned long)videoPacketCount,
+              (unsigned long)audioPacketCount,
+              (unsigned long)frameCount);
+      }
     }
     BOOL cancelled = !running;
     [self closeInput];
     if (!cancelled) {
       if (ended) {
+        NSLog(@"[XuperPad] decodificador: fin de la transmision");
         [self reportEndOfStream];
       } else {
+        NSLog(@"[XuperPad] decodificador: transmision interrumpida");
         [self reportFailure:@"la transmision de video se interrumpio"];
       }
     }
@@ -262,10 +309,12 @@ static int XPInterruptCallback(void *opaque)
 {
   state = calloc(1, sizeof(XPFFmpegContext));
   if (state == NULL) {
+    [self setFailureDetail:@"sin memoria para el contexto de FFmpeg"];
     return NO;
   }
   state->videoIndex = -1;
   state->audioIndex = -1;
+  CFAbsoluteTime openStart = CFAbsoluteTimeGetCurrent();
 
   NSMutableString *headerText = [NSMutableString string];
   NSDictionary *entries = streamHeaders;
@@ -294,6 +343,7 @@ static int XPInterruptCallback(void *opaque)
   AVFormatContext *format = avformat_alloc_context();
   if (format == NULL) {
     av_dict_free(&options);
+    [self setFailureDetail:@"sin memoria para el formato de FFmpeg"];
     return NO;
   }
   format->interrupt_callback.opaque = (__bridge void *)self;
@@ -303,25 +353,39 @@ static int XPInterruptCallback(void *opaque)
   int result = avformat_open_input(&format, url, NULL, &options);
   av_dict_free(&options);
   if (result < 0 || format == NULL) {
+    [self setFailureDetail:[NSString stringWithFormat:@"avformat_open_input %d %@",
+                              result, XPFFmpegErrorText(result)]];
     return NO;
   }
   state->format = format;
 
   if (avformat_find_stream_info(format, NULL) < 0) {
+    [self setFailureDetail:@"avformat_find_stream_info no pudo leer el flujo"];
     return NO;
   }
+
+  NSString *formatName = format->iformat->name != NULL
+                           ? [NSString stringWithUTF8String:format->iformat->name]
+                           : @"desconocido";
+  NSLog(@"[XuperPad] decodificador: formato %@ duracion %.1fs apertura %.2fs",
+        formatName,
+        format->duration / (double)AV_TIME_BASE,
+        CFAbsoluteTimeGetCurrent() - openStart);
 
   AVCodec *videoCodec = NULL;
   state->videoIndex = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, &videoCodec, 0);
   if (state->videoIndex < 0 || videoCodec == NULL) {
+    [self setFailureDetail:@"el flujo no tiene pista de video"];
     return NO;
   }
   AVCodecContext *videoContext = avcodec_alloc_context3(videoCodec);
   if (videoContext == NULL) {
+    [self setFailureDetail:@"sin memoria para el decodificador de video"];
     return NO;
   }
   if (avcodec_parameters_to_context(videoContext, format->streams[state->videoIndex]->codecpar) < 0) {
     avcodec_free_context(&videoContext);
+    [self setFailureDetail:@"no se pudieron copiar los parametros de video"];
     return NO;
   }
   videoContext->thread_count = 2;
@@ -329,9 +393,17 @@ static int XPInterruptCallback(void *opaque)
   videoContext->flags2 |= AV_CODEC_FLAG2_FAST;
   if (avcodec_open2(videoContext, videoCodec, NULL) < 0) {
     avcodec_free_context(&videoContext);
+    [self setFailureDetail:@"no se pudo abrir el decodificador de video"];
     return NO;
   }
   state->video = videoContext;
+  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %d hilos %d",
+        videoCodec->name ?: @"desconocido",
+        videoContext->width,
+        videoContext->height,
+        (int)videoContext->pix_fmt,
+        videoContext->bit_rate,
+        videoContext->thread_count);
 
   AVCodec *audioCodec = NULL;
   state->audioIndex = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0);
@@ -342,6 +414,7 @@ static int XPInterruptCallback(void *opaque)
   state->frame = av_frame_alloc();
   state->packet = av_packet_alloc();
   if (state->frame == NULL || state->packet == NULL) {
+    [self setFailureDetail:@"sin memoria para fotogramas y paquetes"];
     return NO;
   }
   return YES;
@@ -363,6 +436,10 @@ static int XPInterruptCallback(void *opaque)
     return;
   }
   state->audio = audioContext;
+  NSLog(@"[XuperPad] decodificador: audio %@ %d Hz canales %d",
+        audioCodec->name ?: @"desconocido",
+        audioContext->sample_rate,
+        audioContext->channels);
 
   int64_t inputLayout = audioContext->channel_layout;
   if (inputLayout == 0 && audioContext->channels > 0) {
@@ -388,6 +465,9 @@ static int XPInterruptCallback(void *opaque)
   XPAudioOutput *output = [[XPAudioOutput alloc] init];
   if ([output startWithSampleRate:44100 channels:2]) {
     audioOutput = output;
+    NSLog(@"[XuperPad] decodificador: salida de audio lista");
+  } else {
+    NSLog(@"[XuperPad] decodificador: la salida de audio no pudo iniciarse");
   }
 }
 
@@ -396,7 +476,12 @@ static int XPInterruptCallback(void *opaque)
   if (state->video == NULL) {
     return;
   }
-  if (avcodec_send_packet(state->video, state->packet) < 0) {
+  int sendResult = avcodec_send_packet(state->video, state->packet);
+  if (sendResult < 0) {
+    if (videoPacketCount <= 2) {
+      NSLog(@"[XuperPad] decodificador: avcodec_send_packet fallo %d %@",
+            sendResult, XPFFmpegErrorText(sendResult));
+    }
     return;
   }
   while (avcodec_receive_frame(state->video, state->frame) == 0) {
@@ -404,6 +489,11 @@ static int XPInterruptCallback(void *opaque)
     if (frame->width <= 0 || frame->height <= 0 || frame->format < 0) {
       av_frame_unref(frame);
       continue;
+    }
+    frameCount++;
+    if (frameCount == 1) {
+      NSLog(@"[XuperPad] decodificador: primer fotograma %dx%d pix %d",
+            frame->width, frame->height, (int)frame->format);
     }
     if (state->scale == NULL || state->width != frame->width || state->height != frame->height) {
       if (state->scale != NULL) {
@@ -466,7 +556,12 @@ static int XPInterruptCallback(void *opaque)
   if (state->audio == NULL || state->resample == NULL) {
     return;
   }
-  if (avcodec_send_packet(state->audio, state->packet) < 0) {
+  int sendResult = avcodec_send_packet(state->audio, state->packet);
+  if (sendResult < 0) {
+    if (audioPacketCount <= 2) {
+      NSLog(@"[XuperPad] decodificador: audio avcodec_send_packet fallo %d %@",
+            sendResult, XPFFmpegErrorText(sendResult));
+    }
     return;
   }
   while (avcodec_receive_frame(state->audio, state->frame) == 0) {
@@ -530,8 +625,17 @@ static int XPInterruptCallback(void *opaque)
   });
 }
 
+- (void)setFailureDetail:(NSString *)detail
+{
+  if (detail.length > 0) {
+    failureDetail = [detail copy];
+  }
+}
+
 - (void)reportFailure:(NSString *)message
 {
+  NSLog(@"[XuperPad] decodificador: fallo %@ (%@)",
+        message, failureDetail ?: @"sin detalle");
   dispatch_async(dispatch_get_main_queue(), ^{
     id<XPDecoderDelegate> delegate = self.delegate;
     if (delegate != nil) {
