@@ -97,13 +97,25 @@ jobs:
           SDK9="$THEOS/sdks/iPhoneOS9.3.sdk"
           SDK10="$THEOS/sdks/iPhoneOS10.3.sdk"
           mkdir -p "$THEOS/sdks"
-          for NAME in iPhoneOS9.3 iPhoneOS10.3; do
-            URL="https://github.com/theos/sdks/releases/download/$SDK_TAG/$NAME.sdk.tar.xz"
-            curl -fL --retry 3 -o "$RUNNER_TEMP/$NAME.sdk.tar.xz" "$URL"
-            rm -rf "$THEOS/sdks/$NAME.sdk"
-            tar -xJf "$RUNNER_TEMP/$NAME.sdk.tar.xz" -C "$THEOS/sdks"
-            test -d "$THEOS/sdks/$NAME.sdk"
-          done
+          SDK_REPO="$THEOS/sdks_repo"
+          if git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git "$SDK_REPO"; then
+            git -C "$SDK_REPO" sparse-checkout set iPhoneOS9.3.sdk iPhoneOS10.3.sdk
+            for NAME in iPhoneOS9.3 iPhoneOS10.3; do
+              test -d "$SDK_REPO/$NAME.sdk"
+              rm -rf "$THEOS/sdks/$NAME.sdk"
+              cp -R "$SDK_REPO/$NAME.sdk" "$THEOS/sdks/$NAME.sdk"
+            done
+            echo "SDKs tomados del repositorio theos/sdks"
+          else
+            echo "AVISO: no se pudo clonar theos/sdks, se usan las tarballs del release"
+            for NAME in iPhoneOS9.3 iPhoneOS10.3; do
+              URL="https://github.com/theos/sdks/releases/download/$SDK_TAG/$NAME.sdk.tar.xz"
+              curl -fL --retry 3 -o "$RUNNER_TEMP/$NAME.sdk.tar.xz" "$URL"
+              rm -rf "$THEOS/sdks/$NAME.sdk"
+              tar -xJf "$RUNNER_TEMP/$NAME.sdk.tar.xz" -C "$THEOS/sdks"
+              test -d "$THEOS/sdks/$NAME.sdk"
+            done
+          fi
           if [ ! -f "$SDK9/usr/lib/system/liblaunch.tbd" ]; then
             if [ -f "$SDK10/usr/lib/system/liblaunch.tbd" ]; then
               cp "$SDK10/usr/lib/system/liblaunch.tbd" "$SDK9/usr/lib/system/liblaunch.tbd"
@@ -124,6 +136,23 @@ jobs:
           test -f "$SDK9/usr/lib/libSystem.tbd"
           test -f "$SDK10/usr/lib/crt1.o"
           test -f "$SDK10/usr/lib/libSystem.tbd"
+          if ! grep -q -- "_strcmp" "$SDK10/usr/lib/system/libsystem_c.tbd"; then
+            echo "El SDK 10.3 viene recortado, se actualizan los tbd de la libc"
+            for NAME in libsystem_c libsystem_malloc libsystem_pthread libsystem_kernel \
+              libsystem_info libsystem_m libsystem_platform libsystem_trace libsystem_blocks \
+              libsystem_asl libsystem_dnssd libsystem_configuration libsystem_notify \
+              libsystem_sandbox libsystem_coretls libsystem_coreservices \
+              libsystem_containermanager libsystem_network libsystem_networkextension \
+              libsystem_symptoms; do
+              curl -fsSL --retry 3 \
+                "https://raw.githubusercontent.com/theos/sdks/master/iPhoneOS10.3.sdk/usr/lib/system/$NAME.tbd" \
+                -o "$SDK10/usr/lib/system/$NAME.tbd" || true
+            done
+          fi
+          grep -q -- "_strcmp" "$SDK10/usr/lib/system/libsystem_c.tbd" || {
+            echo "El SDK 10.3 no expone la libc completa" >&2
+            exit 1
+          }
           for SDK in "$SDK9" "$SDK10"; do
             test -d "$SDK/System/Library/Frameworks/AVFoundation.framework"
             test -d "$SDK/System/Library/Frameworks/AVKit.framework"
