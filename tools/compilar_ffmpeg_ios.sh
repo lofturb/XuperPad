@@ -246,7 +246,7 @@ printf 'XUPER_PIC_FLAGS := %s\n' "$PIC_FLAGS" > "$OUT/picflags.mk"
 
 CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 $PIC_FLAGS -fno-optimize-sibling-calls"
 LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS"
-CFLAGS_FFMPEG="$CFLAGS_TARGET -I$OUT/include"
+CFLAGS_FFMPEG="$CFLAGS_TARGET -mfpu=neon -I$OUT/include"
 LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib $LIBC_FLAG"
 
 SDK_VERSION="$(basename "$SDK_USED" .sdk)"
@@ -314,8 +314,7 @@ FF_ARGS=(
   --enable-static
   --disable-shared
   --enable-pic
-  --disable-asm
-  --disable-x86asm
+  --enable-neon
   --disable-debug
   --disable-doc
   --disable-programs

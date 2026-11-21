@@ -5,12 +5,14 @@
 
 #import <libavcodec/avcodec.h>
 #import <libavformat/avformat.h>
+#import <libavformat/avio.h>
 #import <libavutil/channel_layout.h>
 #import <libavutil/error.h>
 #import <libavutil/opt.h>
 #import <libswresample/swresample.h>
 #import <libswscale/swscale.h>
 
+#import <stdint.h>
 #import <string.h>
 
 typedef struct {
@@ -57,6 +59,17 @@ typedef struct {
   NSUInteger audioPacketCount;
   NSUInteger frameCount;
   CFAbsoluteTime lastProgressAt;
+  double readSeconds;
+  double videoDecodeSeconds;
+  double audioDecodeSeconds;
+  double scaleSeconds;
+  double slowestReadSeconds;
+  int64_t lastBytesRead;
+  NSUInteger lastFrameCount;
+  double lastReadSeconds;
+  double lastVideoDecodeSeconds;
+  double lastAudioDecodeSeconds;
+  double lastScaleSeconds;
 }
 
 - (void)decodeLoop;
@@ -110,6 +123,17 @@ static int XPInterruptCallback(void *opaque)
     audioPacketCount = 0;
     frameCount = 0;
     lastProgressAt = 0;
+    readSeconds = 0;
+    videoDecodeSeconds = 0;
+    audioDecodeSeconds = 0;
+    scaleSeconds = 0;
+    slowestReadSeconds = 0;
+    lastBytesRead = 0;
+    lastFrameCount = 0;
+    lastReadSeconds = 0;
+    lastVideoDecodeSeconds = 0;
+    lastAudioDecodeSeconds = 0;
+    lastScaleSeconds = 0;
   }
   return self;
 }
@@ -141,6 +165,17 @@ static int XPInterruptCallback(void *opaque)
   audioPacketCount = 0;
   frameCount = 0;
   lastProgressAt = 0;
+  readSeconds = 0;
+  videoDecodeSeconds = 0;
+  audioDecodeSeconds = 0;
+  scaleSeconds = 0;
+  slowestReadSeconds = 0;
+  lastBytesRead = 0;
+  lastFrameCount = 0;
+  lastReadSeconds = 0;
+  lastVideoDecodeSeconds = 0;
+  lastAudioDecodeSeconds = 0;
+  lastScaleSeconds = 0;
   running = YES;
   NSLog(@"[XuperPad] decodificador: inicio %@", address);
 
@@ -183,7 +218,13 @@ static int XPInterruptCallback(void *opaque)
       if (!running) {
         break;
       }
+      CFAbsoluteTime readStart = CFAbsoluteTimeGetCurrent();
       int result = av_read_frame(state->format, state->packet);
+      double readElapsed = CFAbsoluteTimeGetCurrent() - readStart;
+      readSeconds += readElapsed;
+      if (readElapsed > slowestReadSeconds) {
+        slowestReadSeconds = readElapsed;
+      }
       if (result < 0) {
         ended = (result == AVERROR_EOF);
         if (!ended) {
@@ -194,20 +235,51 @@ static int XPInterruptCallback(void *opaque)
       }
       if (state->packet->stream_index == state->videoIndex) {
         videoPacketCount++;
+        CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
         [self decodeVideoPacket];
+        videoDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
       } else if (state->packet->stream_index == state->audioIndex) {
         audioPacketCount++;
+        CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
         [self decodeAudioPacket];
+        audioDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
       }
       av_packet_unref(state->packet);
 
       CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
       if (now - lastProgressAt >= 3.0) {
-        lastProgressAt = now;
-        NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu",
+        double window = now - lastProgressAt;
+        int64_t bytesRead = lastBytesRead;
+        if (state->format != NULL && state->format->pb != NULL) {
+          int64_t position = avio_tell(state->format->pb);
+          if (position >= 0) {
+            bytesRead = position;
+          }
+        }
+        double bytesDelta = (double)(bytesRead - lastBytesRead);
+        if (bytesDelta < 0) {
+          bytesDelta = 0;
+        }
+        double framesDelta = (double)(frameCount - lastFrameCount);
+        NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs",
               (unsigned long)videoPacketCount,
               (unsigned long)audioPacketCount,
-              (unsigned long)frameCount);
+              (unsigned long)frameCount,
+              framesDelta / window,
+              bytesDelta / 1024.0 / window,
+              readSeconds - lastReadSeconds,
+              videoDecodeSeconds - lastVideoDecodeSeconds,
+              scaleSeconds - lastScaleSeconds,
+              audioDecodeSeconds - lastAudioDecodeSeconds,
+              (double)bytesRead / (1024.0 * 1024.0),
+              slowestReadSeconds);
+        lastProgressAt = now;
+        lastBytesRead = bytesRead;
+        lastFrameCount = frameCount;
+        lastReadSeconds = readSeconds;
+        lastVideoDecodeSeconds = videoDecodeSeconds;
+        lastAudioDecodeSeconds = audioDecodeSeconds;
+        lastScaleSeconds = scaleSeconds;
       }
     }
     BOOL cancelled = !running;
@@ -544,7 +616,9 @@ static int XPInterruptCallback(void *opaque)
     for (int index = 0; index < AV_NUM_DATA_POINTERS; index++) {
       source[index] = frame->data[index];
     }
+    CFAbsoluteTime scaleStart = CFAbsoluteTimeGetCurrent();
     sws_scale(state->scale, source, frame->linesize, 0, frame->height, destination, strides);
+    scaleSeconds += CFAbsoluteTimeGetCurrent() - scaleStart;
 
     double pts = (frame->pts == AV_NOPTS_VALUE) ? 0 : frame->pts * av_q2d(state->video->time_base);
     XPVideoFrame *output = [[XPVideoFrame alloc] init];
