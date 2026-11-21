@@ -56,6 +56,12 @@ SIMBOLOS_ESPECIALES = {
 
 SEPARADOR_ENTRADA = re.compile(r"(?m)^[ \t]*-[ \t]+")
 
+ORDEN_ARQUITECTURAS = ("armv7", "armv7s", "arm64", "i386", "x86_64")
+
+SIMBOLO_SIMPLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+ANCHO_LINEA = 150
+
 
 def leer_texto(ruta):
     return ruta.read_text(encoding="utf-8", errors="replace")
@@ -101,9 +107,25 @@ def rutas_de_reexport(entrada):
     return []
 
 
+def normalizar_simbolo(simbolo):
+    simbolo = simbolo.strip()
+    if len(simbolo) >= 2 and simbolo[0] == simbolo[-1] and simbolo[0] in "'\"":
+        simbolo = simbolo[1:-1]
+    return simbolo
+
+
+def formato_simbolo(simbolo):
+    if SIMBOLO_SIMPLE.fullmatch(simbolo):
+        return simbolo
+    return "'{}'".format(simbolo.replace("'", "''"))
+
+
 def recoger_simbolos(texto, por_arquitectura):
     for entrada in entradas_de_exports(texto):
-        simbolos = extraer_lista(entrada, "symbols:")
+        simbolos = [
+            normalizar_simbolo(simbolo)
+            for simbolo in extraer_lista(entrada, "symbols:")
+        ]
         if not simbolos:
             continue
         for arquitectura in extraer_lista(entrada, "archs:"):
@@ -134,6 +156,49 @@ def simbolos_de_sdk(sdk):
     return por_arquitectura
 
 
+def ordenar_arquitecturas(arquitecturas):
+    conocidas = [
+        arquitectura
+        for arquitectura in ORDEN_ARQUITECTURAS
+        if arquitectura in arquitecturas
+    ]
+    extras = sorted(
+        arquitectura
+        for arquitectura in arquitecturas
+        if arquitectura not in ORDEN_ARQUITECTURAS
+    )
+    return conocidas + extras
+
+
+def agrupar_arquitecturas(arquitecturas, por_arquitectura):
+    grupos = []
+    for arquitectura in arquitecturas:
+        simbolos = frozenset(por_arquitectura[arquitectura])
+        for grupo in grupos:
+            if grupo["simbolos"] == simbolos:
+                grupo["archs"].append(arquitectura)
+                break
+        else:
+            grupos.append({"archs": [arquitectura], "simbolos": simbolos})
+    return grupos
+
+
+def envolver_simbolos(simbolos):
+    trozos = []
+    actuales = []
+    longitud = 0
+    for simbolo in simbolos:
+        if actuales and longitud + len(simbolo) + 2 > ANCHO_LINEA:
+            trozos.append(", ".join(actuales))
+            actuales = []
+            longitud = 0
+        actuales.append(simbolo)
+        longitud += len(simbolo) + 2
+    if actuales:
+        trozos.append(", ".join(actuales))
+    return (",\n" + " " * 26).join(trozos)
+
+
 def escribir_tbd(
     salida,
     instalacion,
@@ -151,16 +216,17 @@ def escribir_tbd(
         lineas.append("current-version:       {}".format(version))
     lineas.append("compatibility-version: {}".format(compatibilidad))
     lineas.append("exports:")
-    for arquitectura in sorted(por_arquitectura):
-        simbolos = sorted(por_arquitectura[arquitectura])
+    for grupo in agrupar_arquitecturas(arquitecturas, por_arquitectura):
+        simbolos = [formato_simbolo(simbolo) for simbolo in sorted(grupo["simbolos"])]
         if not simbolos:
             continue
-        trozos = []
-        for indice in range(0, len(simbolos), 8):
-            trozos.append(", ".join(simbolos[indice : indice + 8]))
-        cuerpo = (",\n" + " " * 26).join(trozos)
-        lineas.append("  - archs:              [ {} ]".format(arquitectura))
-        lineas.append("    symbols:            [ {} ]".format(cuerpo))
+        lineas.append(
+            "  - archs:              [ {} ]".format(", ".join(grupo["archs"]))
+        )
+        lineas.append(
+            "    symbols:            [ {} ]".format(envolver_simbolos(simbolos))
+        )
+    lineas.append("...")
     salida.parent.mkdir(parents=True, exist_ok=True)
     salida.write_text("\n".join(lineas) + "\n", encoding="utf-8")
 
@@ -207,7 +273,7 @@ def main():
             "Faltan simbolos esenciales de la libc: {}".format(", ".join(faltantes))
         )
 
-    arquitecturas = sorted(por_arquitectura)
+    arquitecturas = ordenar_arquitecturas(set(por_arquitectura))
     salida = pathlib.Path(argumentos.output)
     escribir_tbd(
         salida,
