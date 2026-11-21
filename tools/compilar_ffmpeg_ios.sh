@@ -376,7 +376,7 @@ LINK_LIBS=(
   "$OUT/lib/libmbedx509.a"
   "$OUT/lib/libmbedcrypto.a"
 )
-if ! "$CC" $CFLAGS_TARGET $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
+if ! "$CC" $CFLAGS_FFMPEG $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
   cat "$WORK/link.log" >&2
   fail "No se pudo enlazar una prueba contra FFmpeg"
 fi
