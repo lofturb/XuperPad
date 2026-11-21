@@ -232,10 +232,10 @@ EOF
   log "Se usa un envoltorio que compila con clang y enlaza con $DRIVER_USED"
 fi
 
-CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 -fPIC"
-LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS $LIBC_FLAG"
+CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 -fPIC -fno-optimize-sibling-calls"
+LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS"
 CFLAGS_FFMPEG="$CFLAGS_TARGET -I$OUT/include"
-LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib"
+LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib $LIBC_FLAG"
 
 SDK_VERSION="$(basename "$SDK_USED" .sdk)"
 SDK_VERSION="${SDK_VERSION#iPhoneOS}"
@@ -331,7 +331,7 @@ if [ -n "$STRIP" ]; then
   FF_ARGS+=(--strip="$STRIP")
 fi
 
-LD_FLAGS="$LDFLAGS_FFMPEG $LIBC_FLAG"
+LD_FLAGS="$LDFLAGS_FFMPEG"
 log "Configurando FFmpeg con $LD_FLAGS"
 if ! PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
   ./configure "${FF_ARGS[@]}" --extra-ldflags="$LD_FLAGS"; then
