@@ -1,8 +1,10 @@
 #import <UIKit/UIKit.h>
 
+#import "XPDecoder.h"
+
 @interface XPGLView : UIView
 
-- (void)displayRGBFrame:(NSData *)rgb width:(int)width height:(int)height;
+- (void)displayFrame:(XPVideoFrameData *)frame;
 - (void)clearFrame;
 
 @end

@@ -352,12 +352,12 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
   [self.statusView hideStatus];
 }
 
-- (void)decoder:(XPDecoder *)decoder didProduceVideoFrame:(NSData *)rgb width:(int)width height:(int)height
+- (void)decoder:(XPDecoder *)decoder didProduceVideoFrame:(XPVideoFrameData *)frame
 {
   if (decoder != self.decoder) {
     return;
   }
-  [self.glView displayRGBFrame:rgb width:width height:height];
+  [self.glView displayFrame:frame];
 }
 
 - (void)decoder:(XPDecoder *)decoder didFailWithMessage:(NSString *)message

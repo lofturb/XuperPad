@@ -14,38 +14,72 @@ static NSString *const XPGLVertexShader =
   @"}\n";
 
 static NSString *const XPGLFragmentShader =
+  @"#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+  @"precision highp float;\n"
+  @"#else\n"
   @"precision mediump float;\n"
+  @"#endif\n"
   @"varying vec2 vTexCoord;\n"
-  @"uniform sampler2D uTexture;\n"
+  @"uniform sampler2D uLuma;\n"
+  @"uniform sampler2D uChromaU;\n"
+  @"uniform sampler2D uChromaV;\n"
+  @"uniform float uYuv;\n"
   @"void main() {\n"
-  @"gl_FragColor = texture2D(uTexture, vTexCoord);\n"
+  @"if (uYuv > 0.5) {\n"
+  @"  float y = texture2D(uLuma, vTexCoord).r;\n"
+  @"  float u = texture2D(uChromaU, vTexCoord).r;\n"
+  @"  float v = texture2D(uChromaV, vTexCoord).r;\n"
+  @"  y = 1.1643 * (y - 0.0625);\n"
+  @"  u = u - 0.5;\n"
+  @"  v = v - 0.5;\n"
+  @"  float r = y + 1.5958 * v;\n"
+  @"  float g = y - 0.39173 * u - 0.81290 * v;\n"
+  @"  float b = y + 2.017 * u;\n"
+  @"  gl_FragColor = vec4(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0), 1.0);\n"
+  @"} else {\n"
+  @"  gl_FragColor = texture2D(uLuma, vTexCoord);\n"
+  @"}\n"
   @"}\n";
 
 @interface XPGLView () {
   EAGLContext *glContext;
   GLuint shaderProgram;
-  GLuint videoTexture;
+  GLuint rgbTexture;
+  GLuint lumaTexture;
+  GLuint chromaUTexture;
+  GLuint chromaVTexture;
   GLuint drawFramebuffer;
   GLuint colorRenderbuffer;
   GLint positionAttribute;
   GLint texCoordAttribute;
-  GLint textureUniform;
+  GLint lumaUniform;
+  GLint chromaUUniform;
+  GLint chromaVUniform;
+  GLint yuvUniform;
   GLint textureWidth;
   GLint textureHeight;
+  GLint lumaTextureWidth;
+  GLint lumaTextureHeight;
+  GLint chromaTextureWidth;
+  GLint chromaTextureHeight;
   GLint drawableWidth;
   GLint drawableHeight;
-  NSData *frameData;
+  XPVideoFrameData *frameData;
   int framePixelWidth;
   int framePixelHeight;
   CADisplayLink *displayLink;
   BOOL programReady;
+  BOOL needsUpload;
 }
 
 - (void)drawFrame;
 - (void)setupFramebuffer;
 - (BOOL)setupProgram;
 - (BOOL)compileShader:(NSString *)source type:(GLenum)type output:(GLuint *)shader;
-- (void)drawQuad;
+- (void)drawQuadUsingYuv:(BOOL)useYuv;
+- (void)uploadRGB:(NSData *)data width:(int)width height:(int)height;
+- (void)uploadLuma:(NSData *)data width:(int)width height:(int)height;
+- (void)uploadChroma:(XPVideoFrameData *)data;
 
 @end
 
@@ -67,9 +101,14 @@ static NSString *const XPGLFragmentShader =
     framePixelHeight = 0;
     textureWidth = 0;
     textureHeight = 0;
+    lumaTextureWidth = 0;
+    lumaTextureHeight = 0;
+    chromaTextureWidth = 0;
+    chromaTextureHeight = 0;
     drawableWidth = 0;
     drawableHeight = 0;
     programReady = NO;
+    needsUpload = NO;
 
     EAGLContext *context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
     if (context != nil) {
@@ -105,17 +144,28 @@ static NSString *const XPGLFragmentShader =
   }
 }
 
-- (void)displayRGBFrame:(NSData *)rgb width:(int)width height:(int)height
+- (void)displayFrame:(XPVideoFrameData *)frame
 {
-  if (width <= 0 || height <= 0) {
+  if (frame == nil) {
     return;
   }
-  if (rgb.length < (NSUInteger)(width * height * 3)) {
+  if (frame.luma != nil && frame.chromaU != nil && frame.chromaV != nil) {
+    if (frame.width <= 0 || frame.height <= 0 ||
+        frame.chromaWidth <= 0 || frame.chromaHeight <= 0) {
+      return;
+    }
+  } else if (frame.rgb != nil) {
+    if (frame.width <= 0 || frame.height <= 0 ||
+        frame.rgb.length < (NSUInteger)(frame.width * frame.height * 3)) {
+      return;
+    }
+  } else {
     return;
   }
-  frameData = rgb;
-  framePixelWidth = width;
-  framePixelHeight = height;
+  frameData = frame;
+  framePixelWidth = frame.width;
+  framePixelHeight = frame.height;
+  needsUpload = YES;
 }
 
 - (void)clearFrame
@@ -123,6 +173,7 @@ static NSString *const XPGLFragmentShader =
   frameData = nil;
   framePixelWidth = 0;
   framePixelHeight = 0;
+  needsUpload = NO;
 }
 
 - (void)drawFrame
@@ -138,39 +189,130 @@ static NSString *const XPGLFragmentShader =
   glViewport(0, 0, drawableWidth, drawableHeight);
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
-  NSData *data = frameData;
+  XPVideoFrameData *data = frameData;
   if (data != nil && programReady && framePixelWidth > 0 && framePixelHeight > 0) {
-    glBindTexture(GL_TEXTURE_2D, videoTexture);
-    if (textureWidth != framePixelWidth || textureHeight != framePixelHeight) {
-      glTexImage2D(GL_TEXTURE_2D,
-                   0,
-                   GL_RGB,
-                   framePixelWidth,
-                   framePixelHeight,
-                   0,
-                   GL_RGB,
-                   GL_UNSIGNED_BYTE,
-                   NULL);
-      textureWidth = framePixelWidth;
-      textureHeight = framePixelHeight;
+    BOOL useYuv = data.luma != nil && data.chromaU != nil && data.chromaV != nil;
+    if (needsUpload) {
+      if (useYuv) {
+        [self uploadLuma:data.luma width:framePixelWidth height:framePixelHeight];
+        [self uploadChroma:data];
+      } else if (data.rgb != nil) {
+        [self uploadRGB:data.rgb width:framePixelWidth height:framePixelHeight];
+      }
+      needsUpload = NO;
     }
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D,
-                    0,
-                    0,
-                    0,
-                    framePixelWidth,
-                    framePixelHeight,
-                    GL_RGB,
-                    GL_UNSIGNED_BYTE,
-                    data.bytes);
-    [self drawQuad];
+    [self drawQuadUsingYuv:useYuv];
   }
   glBindRenderbuffer(GL_RENDERBUFFER, colorRenderbuffer);
   [context presentRenderbuffer:GL_RENDERBUFFER];
 }
 
-- (void)drawQuad
+- (void)uploadRGB:(NSData *)data width:(int)width height:(int)height
+{
+  glBindTexture(GL_TEXTURE_2D, rgbTexture);
+  if (textureWidth != width || textureHeight != height) {
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_RGB,
+                 width,
+                 height,
+                 0,
+                 GL_RGB,
+                 GL_UNSIGNED_BYTE,
+                 NULL);
+    textureWidth = width;
+    textureHeight = height;
+  }
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexSubImage2D(GL_TEXTURE_2D,
+                  0,
+                  0,
+                  0,
+                  width,
+                  height,
+                  GL_RGB,
+                  GL_UNSIGNED_BYTE,
+                  data.bytes);
+}
+
+- (void)uploadLuma:(NSData *)data width:(int)width height:(int)height
+{
+  glBindTexture(GL_TEXTURE_2D, lumaTexture);
+  if (lumaTextureWidth != width || lumaTextureHeight != height) {
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_LUMINANCE,
+                 width,
+                 height,
+                 0,
+                 GL_LUMINANCE,
+                 GL_UNSIGNED_BYTE,
+                 NULL);
+    lumaTextureWidth = width;
+    lumaTextureHeight = height;
+  }
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexSubImage2D(GL_TEXTURE_2D,
+                  0,
+                  0,
+                  0,
+                  width,
+                  height,
+                  GL_LUMINANCE,
+                  GL_UNSIGNED_BYTE,
+                  data.bytes);
+}
+
+- (void)uploadChroma:(XPVideoFrameData *)data
+{
+  if (chromaTextureWidth != data.chromaWidth || chromaTextureHeight != data.chromaHeight) {
+    glBindTexture(GL_TEXTURE_2D, chromaUTexture);
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_LUMINANCE,
+                 data.chromaWidth,
+                 data.chromaHeight,
+                 0,
+                 GL_LUMINANCE,
+                 GL_UNSIGNED_BYTE,
+                 NULL);
+    glBindTexture(GL_TEXTURE_2D, chromaVTexture);
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_LUMINANCE,
+                 data.chromaWidth,
+                 data.chromaHeight,
+                 0,
+                 GL_LUMINANCE,
+                 GL_UNSIGNED_BYTE,
+                 NULL);
+    chromaTextureWidth = data.chromaWidth;
+    chromaTextureHeight = data.chromaHeight;
+  }
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glBindTexture(GL_TEXTURE_2D, chromaUTexture);
+  glTexSubImage2D(GL_TEXTURE_2D,
+                  0,
+                  0,
+                  0,
+                  data.chromaWidth,
+                  data.chromaHeight,
+                  GL_LUMINANCE,
+                  GL_UNSIGNED_BYTE,
+                  data.chromaU.bytes);
+  glBindTexture(GL_TEXTURE_2D, chromaVTexture);
+  glTexSubImage2D(GL_TEXTURE_2D,
+                  0,
+                  0,
+                  0,
+                  data.chromaWidth,
+                  data.chromaHeight,
+                  GL_LUMINANCE,
+                  GL_UNSIGNED_BYTE,
+                  data.chromaV.bytes);
+}
+
+- (void)drawQuadUsingYuv:(BOOL)useYuv
 {
   if (drawableWidth <= 0 || drawableHeight <= 0) {
     return;
@@ -198,8 +340,16 @@ static NSString *const XPGLFragmentShader =
   };
   glUseProgram(shaderProgram);
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, videoTexture);
-  glUniform1i(textureUniform, 0);
+  glBindTexture(GL_TEXTURE_2D, useYuv ? lumaTexture : rgbTexture);
+  glUniform1i(lumaUniform, 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, chromaUTexture);
+  glUniform1i(chromaUUniform, 1);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, chromaVTexture);
+  glUniform1i(chromaVUniform, 2);
+  glActiveTexture(GL_TEXTURE0);
+  glUniform1f(yuvUniform, useYuv ? 1.0f : 0.0f);
   glEnableVertexAttribArray((GLuint)positionAttribute);
   glVertexAttribPointer((GLuint)positionAttribute, 2, GL_FLOAT, GL_FALSE, 0, vertices);
   glEnableVertexAttribArray((GLuint)texCoordAttribute);
@@ -241,13 +391,41 @@ static NSString *const XPGLFragmentShader =
   if (!programReady) {
     programReady = [self setupProgram];
   }
-  if (programReady && videoTexture == 0) {
-    glGenTextures(1, &videoTexture);
-    glBindTexture(GL_TEXTURE_2D, videoTexture);
+  if (programReady && rgbTexture == 0) {
+    glGenTextures(1, &rgbTexture);
+    glBindTexture(GL_TEXTURE_2D, rgbTexture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+  }
+  if (programReady && lumaTexture == 0) {
+    glGenTextures(1, &lumaTexture);
+    glBindTexture(GL_TEXTURE_2D, lumaTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 1, 1, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+  }
+  if (programReady && chromaUTexture == 0) {
+    glGenTextures(1, &chromaUTexture);
+    glBindTexture(GL_TEXTURE_2D, chromaUTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 1, 1, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+  }
+  if (programReady && chromaVTexture == 0) {
+    glGenTextures(1, &chromaVTexture);
+    glBindTexture(GL_TEXTURE_2D, chromaVTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 1, 1, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
   }
   [EAGLContext setCurrentContext:nil];
 }
@@ -283,7 +461,10 @@ static NSString *const XPGLFragmentShader =
   shaderProgram = program;
   positionAttribute = glGetAttribLocation(program, "aPosition");
   texCoordAttribute = glGetAttribLocation(program, "aTexCoord");
-  textureUniform = glGetUniformLocation(program, "uTexture");
+  lumaUniform = glGetUniformLocation(program, "uLuma");
+  chromaUUniform = glGetUniformLocation(program, "uChromaU");
+  chromaVUniform = glGetUniformLocation(program, "uChromaV");
+  yuvUniform = glGetUniformLocation(program, "uYuv");
   return YES;
 }
 

@@ -4,8 +4,8 @@
 #import <AVFoundation/AVFoundation.h>
 #import <string.h>
 
-static const int XPAudioBufferFrames = 4096;
-static const int XPAudioBufferCount = 4;
+static const int XPAudioBufferFrames = 1024;
+static const int XPAudioBufferCount = 16;
 
 @interface XPAudioOutput () {
   AudioQueueRef queue;
@@ -20,6 +20,9 @@ static const int XPAudioBufferCount = 4;
   int channelCount;
   long long samplesAccepted;
   long long samplesPlayed;
+  NSUInteger callbacks;
+  float meterPeak;
+  float meterAverage;
 }
 
 - (AudioQueueBufferRef)takeFreeBuffer;
@@ -50,6 +53,9 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     channelCount = 2;
     samplesAccepted = 0;
     samplesPlayed = 0;
+    callbacks = 0;
+    meterPeak = 0;
+    meterAverage = 0;
     queue = NULL;
   }
   return self;
@@ -79,6 +85,17 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     sessionError = nil;
   }
 
+  NSMutableArray *routeNames = [NSMutableArray array];
+  for (AVAudioSessionPortDescription *output in session.currentRoute.outputs) {
+    [routeNames addObject:[NSString stringWithFormat:@"%@ %@", output.portType, output.portName]];
+  }
+  NSLog(@"[XuperPad] audio: sesion activa %d tasa %.0f canales %u volumen %.2f salidas %@",
+        (int)session.isActive,
+        session.sampleRate,
+        (unsigned int)session.outputNumberOfChannels,
+        (float)session.outputVolume,
+        routeNames);
+
   memset(&format, 0, sizeof(format));
   format.mSampleRate = sampleRate;
   format.mFormatID = kAudioFormatLinearPCM;
@@ -102,6 +119,8 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     return NO;
   }
   queue = created;
+  UInt32 metering = 1;
+  AudioQueueSetProperty(queue, kAudioQueueProperty_Metering, &metering, sizeof(metering));
 
   UInt32 capacity = (UInt32)(XPAudioBufferFrames * channels * 2);
   for (int index = 0; index < XPAudioBufferCount; index++) {
@@ -199,8 +218,20 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     return;
   }
   UInt32 played = buffer->mAudioDataByteSize;
+  AudioQueueLevelMetering level;
+  UInt32 levelSize = sizeof(level);
+  BOOL hasLevel = NO;
+  if (audioQueue != NULL &&
+      AudioQueueGetProperty(audioQueue, kAudioQueueProperty_CurrentLevel, &level, &levelSize) == noErr) {
+    hasLevel = YES;
+  }
   [stateCondition lock];
   if (active) {
+    callbacks++;
+    if (hasLevel) {
+      meterPeak = level.mPeakPower;
+      meterAverage = level.mAveragePower;
+    }
     samplesPlayed += (long long)(played / (UInt32)(2 * channelCount));
     buffer->mAudioDataByteSize = (UInt32)(XPAudioBufferFrames * channelCount * 2);
     [freeBuffers addObject:[NSValue valueWithPointer:buffer]];
@@ -251,6 +282,38 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   return (double)played / (double)rate;
 }
 
+- (NSUInteger)callbackCount
+{
+  [stateCondition lock];
+  NSUInteger count = callbacks;
+  [stateCondition unlock];
+  return count;
+}
+
+- (NSUInteger)freeBufferCount
+{
+  [stateCondition lock];
+  NSUInteger count = freeBuffers.count;
+  [stateCondition unlock];
+  return count;
+}
+
+- (float)meterPeak
+{
+  [stateCondition lock];
+  float value = meterPeak;
+  [stateCondition unlock];
+  return value;
+}
+
+- (float)meterAverage
+{
+  [stateCondition lock];
+  float value = meterAverage;
+  [stateCondition unlock];
+  return value;
+}
+
 - (void)stop
 {
   if (queue == NULL) {
@@ -274,6 +337,9 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   started = NO;
   samplesAccepted = 0;
   samplesPlayed = 0;
+  callbacks = 0;
+  meterPeak = 0;
+  meterAverage = 0;
   [stateCondition unlock];
 
   NSError *sessionError = nil;

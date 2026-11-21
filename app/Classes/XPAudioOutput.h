@@ -6,6 +6,10 @@
 - (void)enqueuePCM:(NSData *)pcm;
 - (double)queuedSeconds;
 - (double)playedSeconds;
+- (NSUInteger)callbackCount;
+- (NSUInteger)freeBufferCount;
+- (float)meterPeak;
+- (float)meterAverage;
 - (void)stop;
 
 @end
