@@ -310,6 +310,8 @@ FF_ARGS=(
   --disable-everything
   --disable-videotoolbox
   --disable-audiotoolbox
+  --disable-iconv
+  --disable-zlib
   --enable-avcodec
   --enable-avformat
   --enable-avutil
