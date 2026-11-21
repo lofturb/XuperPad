@@ -16,7 +16,7 @@ typedef struct {
   AVCodecContext *audio;
   AVFrame *frame;
   AVPacket *packet;
-  SwsContext *scale;
+  struct SwsContext *scale;
   SwrContext *resample;
   int videoIndex;
   int audioIndex;
@@ -296,7 +296,7 @@ static int XPInterruptCallback(void *opaque)
     av_dict_free(&options);
     return NO;
   }
-  format->interrupt_callback.data = (__bridge void *)self;
+  format->interrupt_callback.opaque = (__bridge void *)self;
   format->interrupt_callback.callback = XPInterruptCallback;
 
   const char *url = [streamAddress UTF8String];
@@ -311,7 +311,7 @@ static int XPInterruptCallback(void *opaque)
     return NO;
   }
 
-  const AVCodec *videoCodec = NULL;
+  AVCodec *videoCodec = NULL;
   state->videoIndex = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, &videoCodec, 0);
   if (state->videoIndex < 0 || videoCodec == NULL) {
     return NO;
@@ -333,7 +333,7 @@ static int XPInterruptCallback(void *opaque)
   }
   state->video = videoContext;
 
-  const AVCodec *audioCodec = NULL;
+  AVCodec *audioCodec = NULL;
   state->audioIndex = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0);
   if (state->audioIndex >= 0 && audioCodec != NULL) {
     [self openAudioWithCodec:audioCodec];
@@ -444,7 +444,11 @@ static int XPInterruptCallback(void *opaque)
     }
     uint8_t *destination[4] = { state->rgb, NULL, NULL, NULL };
     int strides[4] = { state->width * 3, 0, 0, 0 };
-    sws_scale(state->scale, frame->data, frame->linesize, 0, frame->height, destination, strides);
+    const uint8_t *source[AV_NUM_DATA_POINTERS];
+    for (int index = 0; index < AV_NUM_DATA_POINTERS; index++) {
+      source[index] = frame->data[index];
+    }
+    sws_scale(state->scale, source, frame->linesize, 0, frame->height, destination, strides);
 
     double pts = (frame->pts == AV_NOPTS_VALUE) ? 0 : frame->pts * av_q2d(state->video->time_base);
     XPVideoFrame *output = [[XPVideoFrame alloc] init];
@@ -473,10 +477,14 @@ static int XPInterruptCallback(void *opaque)
       uint8_t *buffer = av_malloc((size_t)bytes);
       if (buffer != NULL) {
         uint8_t *destination = buffer;
+        const uint8_t *source[AV_NUM_DATA_POINTERS];
+        for (int index = 0; index < AV_NUM_DATA_POINTERS; index++) {
+          source[index] = frame->extended_data[index];
+        }
         int converted = swr_convert(state->resample,
                                     &destination,
                                     available,
-                                    (const uint8_t **)frame->extended_data,
+                                    source,
                                     frame->nb_samples);
         if (converted > 0) {
           if (!hasAudioStart) {

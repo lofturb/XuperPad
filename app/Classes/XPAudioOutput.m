@@ -1,6 +1,7 @@
 #import "XPAudioOutput.h"
 
 #import <AudioToolbox/AudioToolbox.h>
+#import <string.h>
 
 static const int XPAudioBufferFrames = 2048;
 static const int XPAudioBufferCount = 4;
