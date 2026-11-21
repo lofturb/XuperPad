@@ -242,6 +242,10 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
 {
   XPDecoder *decoder = [[XPDecoder alloc] init];
   decoder.delegate = self;
+  CGSize target = self.view.bounds.size;
+  if (target.width > 1.0 && target.height > 1.0) {
+    decoder.presentationSize = target;
+  }
   self.decoder = decoder;
 
   self.playerLayer.hidden = YES;

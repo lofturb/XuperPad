@@ -1,9 +1,10 @@
 #import "XPAudioOutput.h"
 
 #import <AudioToolbox/AudioToolbox.h>
+#import <AVFoundation/AVFoundation.h>
 #import <string.h>
 
-static const int XPAudioBufferFrames = 2048;
+static const int XPAudioBufferFrames = 4096;
 static const int XPAudioBufferCount = 4;
 
 @interface XPAudioOutput () {
@@ -14,6 +15,7 @@ static const int XPAudioBufferCount = 4;
   NSLock *queueLock;
   BOOL active;
   BOOL started;
+  BOOL warnedAboutStall;
   int rate;
   int channelCount;
   long long samplesAccepted;
@@ -43,6 +45,7 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     queueLock = [[NSLock alloc] init];
     active = NO;
     started = NO;
+    warnedAboutStall = NO;
     rate = 44100;
     channelCount = 2;
     samplesAccepted = 0;
@@ -62,6 +65,20 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   }
   rate = sampleRate;
   channelCount = channels;
+
+  NSError *sessionError = nil;
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  [session setCategory:AVAudioSessionCategoryPlayback error:&sessionError];
+  if (sessionError != nil) {
+    NSLog(@"[XuperPad] audio: no se pudo fijar la categoria (%@)", sessionError.localizedDescription);
+    sessionError = nil;
+  }
+  [session setActive:YES error:&sessionError];
+  if (sessionError != nil) {
+    NSLog(@"[XuperPad] audio: no se pudo activar la sesion (%@)", sessionError.localizedDescription);
+    sessionError = nil;
+  }
+
   memset(&format, 0, sizeof(format));
   format.mSampleRate = sampleRate;
   format.mFormatID = kAudioFormatLinearPCM;
@@ -81,6 +98,7 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
                                         0,
                                         &created);
   if (status != noErr || created == NULL) {
+    NSLog(@"[XuperPad] audio: AudioQueueNewOutput fallo %d", (int)status);
     return NO;
   }
   queue = created;
@@ -97,11 +115,14 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     [freeBuffers addObject:[NSValue valueWithPointer:buffer]];
   }
   if (freeBuffers.count == 0) {
+    NSLog(@"[XuperPad] audio: no se pudieron asignar los buffers de salida");
     AudioQueueDispose(queue, true);
     queue = NULL;
     return NO;
   }
   active = YES;
+  NSLog(@"[XuperPad] audio: cola creada con %lu buffers de %d tramas",
+        (unsigned long)freeBuffers.count, XPAudioBufferFrames);
   return YES;
 }
 
@@ -116,8 +137,13 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   while (offset < total) {
     AudioQueueBufferRef buffer = [self takeFreeBuffer];
     if (buffer == NULL) {
+      if (!warnedAboutStall) {
+        warnedAboutStall = YES;
+        NSLog(@"[XuperPad] audio: la cola de salida no avanza, se descarta audio");
+      }
       return;
     }
+    warnedAboutStall = NO;
     UInt32 capacity = buffer->mAudioDataByteSize;
     if (capacity == 0) {
       continue;
@@ -149,8 +175,13 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
 - (AudioQueueBufferRef)takeFreeBuffer
 {
   [stateCondition lock];
+  CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 1.0;
   while (active && freeBuffers.count == 0) {
-    [stateCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    if (CFAbsoluteTimeGetCurrent() > deadline) {
+      [stateCondition unlock];
+      return NULL;
+    }
+    [stateCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
   }
   AudioQueueBufferRef buffer = NULL;
   if (freeBuffers.count > 0) {
@@ -187,7 +218,12 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   if (shouldStart) {
     [queueLock lock];
     if (queue != NULL) {
-      AudioQueueStart(queue, NULL);
+      OSStatus status = AudioQueueStart(queue, NULL);
+      if (status != noErr) {
+        NSLog(@"[XuperPad] audio: AudioQueueStart fallo %d", (int)status);
+      } else {
+        NSLog(@"[XuperPad] audio: la cola de sonido empezo a reproducir");
+      }
     }
     [queueLock unlock];
   }
@@ -239,6 +275,11 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   samplesAccepted = 0;
   samplesPlayed = 0;
   [stateCondition unlock];
+
+  NSError *sessionError = nil;
+  [[AVAudioSession sharedInstance] setActive:NO
+                                 withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                                       error:&sessionError];
 }
 
 - (void)dealloc

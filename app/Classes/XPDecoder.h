@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 @class XPDecoder;
 
@@ -12,6 +13,7 @@
 @interface XPDecoder : NSObject
 
 @property (nonatomic, weak) id<XPDecoderDelegate> delegate;
+@property (nonatomic, assign) CGSize presentationSize;
 
 - (BOOL)startWithAddress:(NSString *)address headers:(NSDictionary *)headers;
 - (void)stop;

@@ -8,11 +8,14 @@
 #import <libavformat/avio.h>
 #import <libavutil/channel_layout.h>
 #import <libavutil/error.h>
+#import <libavutil/log.h>
 #import <libavutil/opt.h>
 #import <libswresample/swresample.h>
 #import <libswscale/swscale.h>
 
+#import <stdarg.h>
 #import <stdint.h>
+#import <stdio.h>
 #import <string.h>
 
 typedef struct {
@@ -70,6 +73,10 @@ typedef struct {
   double lastVideoDecodeSeconds;
   double lastAudioDecodeSeconds;
   double lastScaleSeconds;
+  double latestPTS;
+  double lastAudioClock;
+  CFAbsoluteTime lastAudioClockAt;
+  volatile BOOL audioClockHealthy;
 }
 
 - (void)decodeLoop;
@@ -83,6 +90,7 @@ typedef struct {
 - (XPVideoFrame *)nextFrameToShow;
 - (void)throttleIfNeeded;
 - (double)masterClock;
+- (void)updateClockHealth;
 - (void)reportVideoSize:(int)width height:(int)height;
 - (void)reportFailure:(NSString *)message;
 - (void)reportEndOfStream;
@@ -106,6 +114,24 @@ static int XPInterruptCallback(void *opaque)
     return 1;
   }
   return decoder.isRunning ? 0 : 1;
+}
+
+static volatile BOOL XPFFmpegVerbose = NO;
+
+static void XPFFmpegLogCallback(void *context, int level, const char *format, va_list arguments)
+{
+  if (level < AV_LOG_INFO) {
+    return;
+  }
+  if (level == AV_LOG_INFO && !XPFFmpegVerbose) {
+    return;
+  }
+  char buffer[768];
+  int printed = vsnprintf(buffer, sizeof(buffer), format, arguments);
+  if (printed <= 0) {
+    return;
+  }
+  NSLog(@"[XuperPad] ffmpeg: %s", buffer);
 }
 
 @implementation XPDecoder
@@ -134,6 +160,9 @@ static int XPInterruptCallback(void *opaque)
     lastVideoDecodeSeconds = 0;
     lastAudioDecodeSeconds = 0;
     lastScaleSeconds = 0;
+    latestPTS = 0;
+    lastAudioClock = 0;
+    lastAudioClockAt = 0;
   }
   return self;
 }
@@ -176,6 +205,9 @@ static int XPInterruptCallback(void *opaque)
   lastVideoDecodeSeconds = 0;
   lastAudioDecodeSeconds = 0;
   lastScaleSeconds = 0;
+  latestPTS = 0;
+  lastAudioClock = 0;
+  lastAudioClockAt = 0;
   running = YES;
   NSLog(@"[XuperPad] decodificador: inicio %@", address);
 
@@ -204,6 +236,9 @@ static int XPInterruptCallback(void *opaque)
 {
   @autoreleasepool {
     lastProgressAt = CFAbsoluteTimeGetCurrent();
+    XPFFmpegVerbose = YES;
+    av_log_set_level(AV_LOG_INFO);
+    av_log_set_callback(XPFFmpegLogCallback);
     if (![self openInput]) {
       [self closeInput];
       NSLog(@"[XuperPad] decodificador: fallo al abrir (%@)", failureDetail ?: @"sin detalle");
@@ -212,8 +247,10 @@ static int XPInterruptCallback(void *opaque)
       [self broadcastFrames];
       return;
     }
+    XPFFmpegVerbose = NO;
     BOOL ended = NO;
     while (running) {
+      [self updateClockHealth];
       [self throttleIfNeeded];
       if (!running) {
         break;
@@ -261,7 +298,11 @@ static int XPInterruptCallback(void *opaque)
           bytesDelta = 0;
         }
         double framesDelta = (double)(frameCount - lastFrameCount);
-        NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs",
+        [frameCondition lock];
+        NSUInteger queued = frames.count;
+        [frameCondition unlock];
+        double lag = latestPTS - [self masterClock];
+        NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu retraso %.2fs",
               (unsigned long)videoPacketCount,
               (unsigned long)audioPacketCount,
               (unsigned long)frameCount,
@@ -272,7 +313,9 @@ static int XPInterruptCallback(void *opaque)
               scaleSeconds - lastScaleSeconds,
               audioDecodeSeconds - lastAudioDecodeSeconds,
               (double)bytesRead / (1024.0 * 1024.0),
-              slowestReadSeconds);
+              slowestReadSeconds,
+              (unsigned long)queued,
+              lag);
         lastProgressAt = now;
         lastBytesRead = bytesRead;
         lastFrameCount = frameCount;
@@ -325,22 +368,29 @@ static int XPInterruptCallback(void *opaque)
       [frameCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
       continue;
     }
-    XPVideoFrame *head = frames.firstObject;
     double clock = [self masterClock];
-    if (clock + 0.25 < head.pts) {
+    XPVideoFrame *head = frames.firstObject;
+    XPVideoFrame *newest = frames.lastObject;
+    if (head.pts > clock + 0.30) {
       [frameCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
       continue;
     }
     XPVideoFrame *chosen = head;
-    while (frames.count > 1) {
-      XPVideoFrame *candidate = frames[1];
-      if (candidate.pts > clock + 0.25) {
-        break;
+    NSUInteger chosenIndex = 0;
+    if (newest.pts < clock - 0.50) {
+      chosen = newest;
+      chosenIndex = frames.count - 1;
+    } else {
+      for (NSUInteger index = 1; index < frames.count; index++) {
+        XPVideoFrame *candidate = frames[index];
+        if (candidate.pts > clock + 0.05) {
+          break;
+        }
+        chosen = candidate;
+        chosenIndex = index;
       }
-      chosen = candidate;
-      [frames removeObjectAtIndex:0];
     }
-    [frames removeObjectAtIndex:0];
+    [frames removeObjectsInRange:NSMakeRange(0, chosenIndex + 1)];
     [frameCondition unlock];
     return chosen;
   }
@@ -350,7 +400,7 @@ static int XPInterruptCallback(void *opaque)
 
 - (double)masterClock
 {
-  if (hasAudioStart && audioOutput != nil) {
+  if (hasAudioStart && audioOutput != nil && audioClockHealthy) {
     return audioStartPTS + [audioOutput playedSeconds];
   }
   if (hasVideoStart) {
@@ -359,21 +409,43 @@ static int XPInterruptCallback(void *opaque)
   return 0;
 }
 
+- (void)updateClockHealth
+{
+  if (!hasAudioStart || audioOutput == nil) {
+    audioClockHealthy = NO;
+    return;
+  }
+  double played = [audioOutput playedSeconds];
+  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  if (played > lastAudioClock + 0.001) {
+    lastAudioClock = played;
+    lastAudioClockAt = now;
+    audioClockHealthy = YES;
+    return;
+  }
+  if (lastAudioClockAt > 0 && now - lastAudioClockAt > 1.5) {
+    audioClockHealthy = NO;
+  }
+}
+
 - (void)throttleIfNeeded
 {
-  for (int guard = 0; guard < 300; guard++) {
+  for (int guard = 0; guard < 200; guard++) {
     if (!running) {
       return;
     }
-    BOOL audioBehind = (audioOutput != nil && [audioOutput queuedSeconds] > 1.2);
-    BOOL videoBehind = NO;
-    [frameCondition lock];
-    videoBehind = frames.count > 8;
-    [frameCondition unlock];
-    if (!audioBehind && !videoBehind) {
+    double clock = [self masterClock];
+    if (clock <= 0 || latestPTS <= 0) {
       return;
     }
-    [NSThread sleepForTimeInterval:0.01];
+    double lag = latestPTS - clock;
+    if (lag <= 0.25) {
+      return;
+    }
+    if (lag > 4.0) {
+      return;
+    }
+    [NSThread sleepForTimeInterval:0.005];
   }
 }
 
@@ -397,6 +469,8 @@ static int XPInterruptCallback(void *opaque)
       if ([(NSString *)key caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
         hasUserAgent = YES;
       }
+      NSLog(@"[XuperPad] decodificador: cabecera %@ de %lu bytes",
+            (NSString *)key, (unsigned long)[(NSString *)value length]);
       [headerText appendFormat:@"%@: %@\r\n", (NSString *)key, (NSString *)value];
     }
   }
@@ -524,17 +598,22 @@ static int XPInterruptCallback(void *opaque)
     inputLayout = av_get_default_channel_layout(audioContext->channels);
   }
   if (inputLayout == 0) {
+    NSLog(@"[XuperPad] decodificador: el audio no tiene disposicion de canales utilizable");
     return;
   }
   SwrContext *resample = swr_alloc();
   if (resample == NULL) {
+    NSLog(@"[XuperPad] decodificador: sin memoria para el remuestreador de audio");
     return;
   }
   av_opt_set_int(resample, "in_channel_layout", inputLayout, 0);
   av_opt_set_int(resample, "in_sample_rate", audioContext->sample_rate, 0);
   av_opt_set_int(resample, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
   av_opt_set_int(resample, "out_sample_rate", 44100, 0);
-  if (swr_init(resample) < 0) {
+  int resampleResult = swr_init(resample);
+  if (resampleResult < 0) {
+    NSLog(@"[XuperPad] decodificador: swr_init fallo %d %@",
+          resampleResult, XPFFmpegErrorText(resampleResult));
     swr_free(&resample);
     return;
   }
@@ -573,16 +652,38 @@ static int XPInterruptCallback(void *opaque)
       NSLog(@"[XuperPad] decodificador: primer fotograma %dx%d pix %d",
             frame->width, frame->height, (int)frame->format);
     }
-    if (state->scale == NULL || state->width != frame->width || state->height != frame->height) {
+    int sourceWidth = frame->width;
+    int sourceHeight = frame->height;
+    int targetWidth = sourceWidth;
+    int targetHeight = sourceHeight;
+    CGSize requested = self.presentationSize;
+    if (requested.width > 1.0 && requested.height > 1.0) {
+      double factor = requested.width / (double)sourceWidth;
+      double heightFactor = requested.height / (double)sourceHeight;
+      if (heightFactor < factor) {
+        factor = heightFactor;
+      }
+      if (factor < 1.0) {
+        targetWidth = (int)(sourceWidth * factor);
+        targetHeight = (int)(sourceHeight * factor);
+      }
+    }
+    if (targetWidth < 16) {
+      targetWidth = 16;
+    }
+    if (targetHeight < 16) {
+      targetHeight = 16;
+    }
+    if (state->scale == NULL || state->width != targetWidth || state->height != targetHeight) {
       if (state->scale != NULL) {
         sws_freeContext(state->scale);
         state->scale = NULL;
       }
-      state->scale = sws_getContext(frame->width,
-                                    frame->height,
+      state->scale = sws_getContext(sourceWidth,
+                                    sourceHeight,
                                     (enum AVPixelFormat)frame->format,
-                                    frame->width,
-                                    frame->height,
+                                    targetWidth,
+                                    targetHeight,
                                     AV_PIX_FMT_RGB24,
                                     SWS_BILINEAR,
                                     NULL,
@@ -592,9 +693,9 @@ static int XPInterruptCallback(void *opaque)
         av_frame_unref(frame);
         continue;
       }
-      state->width = frame->width;
-      state->height = frame->height;
-      int size = frame->width * frame->height * 3;
+      state->width = targetWidth;
+      state->height = targetHeight;
+      int size = targetWidth * targetHeight * 3;
       if (state->rgbSize < size) {
         if (state->rgb != NULL) {
           av_free(state->rgb);
@@ -604,7 +705,9 @@ static int XPInterruptCallback(void *opaque)
         state->rgb = av_malloc((size_t)size);
         state->rgbSize = size;
       }
-      [self reportVideoSize:frame->width height:frame->height];
+      NSLog(@"[XuperPad] decodificador: presentacion %dx%d desde %dx%d",
+            targetWidth, targetHeight, sourceWidth, sourceHeight);
+      [self reportVideoSize:sourceWidth height:sourceHeight];
     }
     if (state->rgb == NULL) {
       av_frame_unref(frame);
@@ -621,6 +724,9 @@ static int XPInterruptCallback(void *opaque)
     scaleSeconds += CFAbsoluteTimeGetCurrent() - scaleStart;
 
     double pts = (frame->pts == AV_NOPTS_VALUE) ? 0 : frame->pts * av_q2d(state->video->time_base);
+    if (pts > latestPTS) {
+      latestPTS = pts;
+    }
     XPVideoFrame *output = [[XPVideoFrame alloc] init];
     output.rgb = [NSData dataWithBytes:state->rgb length:(NSUInteger)(state->width * state->height * 3)];
     output.width = state->width;
@@ -662,11 +768,16 @@ static int XPInterruptCallback(void *opaque)
                                     source,
                                     frame->nb_samples);
         if (converted > 0) {
-          if (!hasAudioStart) {
-            hasAudioStart = YES;
-            audioStartPTS = (frame->pts == AV_NOPTS_VALUE)
+          double audioPTS = (frame->pts == AV_NOPTS_VALUE)
                           ? 0
                           : frame->pts * av_q2d(state->audio->time_base);
+          if (!hasAudioStart) {
+            hasAudioStart = YES;
+            audioStartPTS = audioPTS;
+            lastAudioClockAt = CFAbsoluteTimeGetCurrent();
+          }
+          if (audioPTS > latestPTS) {
+            latestPTS = audioPTS;
           }
           NSData *pcm = [NSData dataWithBytes:buffer
                                        length:(NSUInteger)(converted * 2 * (int)sizeof(int16_t))];
@@ -778,6 +889,7 @@ static int XPInterruptCallback(void *opaque)
   }
   free(state);
   state = NULL;
+  av_log_set_callback(NULL);
 }
 
 - (void)dealloc
