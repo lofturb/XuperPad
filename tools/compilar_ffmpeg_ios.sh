@@ -364,10 +364,22 @@ cat > "$WORK/prueba.c" <<'EOF'
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include <mbedtls/ssl.h>
 
 int main(void)
 {
-    return (avcodec_version() > 0 && avformat_version() > 0) ? 0 : 1;
+    volatile __typeof__(avformat_open_input) abrir = avformat_open_input;
+    volatile __typeof__(sws_scale) escalar = sws_scale;
+    volatile __typeof__(swr_convert) convertir = swr_convert;
+    const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
+    AVFormatContext *formato = avformat_alloc_context();
+    mbedtls_ssl_context ssl;
+
+    mbedtls_ssl_init(&ssl);
+    mbedtls_ssl_free(&ssl);
+    avformat_free_context(&formato);
+
+    return (codec != NULL && formato != NULL && abrir != NULL && escalar != NULL && convertir != NULL) ? 0 : 1;
 }
 EOF
 LINK_LIBS=(
@@ -385,18 +397,6 @@ if ! "$CC" $CFLAGS_FFMPEG $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_L
   fail "No se pudo enlazar una prueba contra FFmpeg"
 fi
 file "$WORK/prueba"
-
-log "Comprobando simbolos"
-require_symbol() {
-  local archive="$1" symbol="$2"
-  [ -n "$NM" ] || fail "nm no disponible para comprobar $archive"
-  "$NM" --defined-only "$archive" 2>/dev/null | grep -q "$symbol" || fail "Falta $symbol en $archive"
-}
-require_symbol "$OUT/lib/libavcodec.a" "avcodec_find_decoder"
-require_symbol "$OUT/lib/libavformat.a" "avformat_open_input"
-require_symbol "$OUT/lib/libswscale.a" "sws_scale"
-require_symbol "$OUT/lib/libswresample.a" "swr_convert"
-require_symbol "$OUT/lib/libmbedtls.a" "mbedtls_ssl_init"
 
 CHECK_DIR="$WORK/check"
 rm -rf "$CHECK_DIR"
