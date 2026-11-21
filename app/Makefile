@@ -1,6 +1,10 @@
 XUPER_FFMPEG_SDK_VERSION ?= 9.3
+XUPER_PIC_FLAGS ?= -fPIC
 ifneq ($(wildcard vendor/ffmpeg/ldconfig.mk),)
 include vendor/ffmpeg/ldconfig.mk
+endif
+ifneq ($(wildcard vendor/ffmpeg/picflags.mk),)
+include vendor/ffmpeg/picflags.mk
 endif
 
 TARGET = iphone:clang:$(XUPER_FFMPEG_SDK_VERSION):9.0
@@ -49,6 +53,7 @@ endif
 
 XuperPad_CFLAGS = -fobjc-arc -fblocks \
 	-fno-optimize-sibling-calls \
+	$(XUPER_PIC_FLAGS) \
 	-I$(CURDIR)/vendor/ffmpeg/include \
 	-Wno-deprecated-declarations \
 	-Wno-unused-parameter \

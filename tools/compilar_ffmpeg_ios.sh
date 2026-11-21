@@ -232,7 +232,19 @@ EOF
   log "Se usa un envoltorio que compila con clang y enlaza con $DRIVER_USED"
 fi
 
-CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 -fPIC -fno-optimize-sibling-calls"
+PIC_RESULT="$(SDK9="$SDK9" SDK10="$SDK10" TOOLCHAIN="$TOOLCHAIN" WORK="$WORK/pic" bash "$SCRIPT_DIR/diagnostico_pic.sh" 2>&1)" || {
+  printf '%s\n' "$PIC_RESULT" >&2
+  fail "El diagnostico de PIE fallo"
+}
+printf '%s\n' "$PIC_RESULT"
+PIC_FLAGS="$(printf '%s\n' "$PIC_RESULT" | sed -n 's/^BANDERAS_PIC=//p' | tail -n 1)"
+case "$PIC_FLAGS" in
+  ""|NINGUNA) fail "Ninguna bandera produce objetos armv7 compatibles con PIE" ;;
+esac
+log "Banderas PIE para armv7: $PIC_FLAGS"
+printf 'XUPER_PIC_FLAGS := %s\n' "$PIC_FLAGS" > "$OUT/picflags.mk"
+
+CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 $PIC_FLAGS -fno-optimize-sibling-calls"
 LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS"
 CFLAGS_FFMPEG="$CFLAGS_TARGET -I$OUT/include"
 LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib $LIBC_FLAG"
@@ -301,6 +313,7 @@ FF_ARGS=(
   --pkg-config-flags=--static
   --enable-static
   --disable-shared
+  --enable-pic
   --disable-asm
   --disable-x86asm
   --disable-debug
@@ -396,6 +409,32 @@ LINK_LIBS=(
 if ! "$CC" $CFLAGS_FFMPEG $LD_FLAGS "$WORK/prueba.c" -o "$WORK/prueba" "${LINK_LIBS[@]}" -lm > "$WORK/link.log" 2>&1; then
   cat "$WORK/link.log" >&2
   fail "No se pudo enlazar una prueba contra FFmpeg"
+fi
+if grep -q "PIE disabled" "$WORK/link.log"; then
+  grep "PIE disabled" "$WORK/link.log" >&2
+  fail "Las librerias de FFmpeg usan direccionamiento absoluto y no permiten PIE"
+fi
+if ! "$PYTHON" - "$WORK/prueba" <<'PY'
+import struct
+import sys
+
+data = open(sys.argv[1], "rb").read()
+magic = data[:4]
+if magic == b"\xce\xfa\xed\xfe":
+    endian = "<"
+elif magic == b"\xfe\xed\xfa\xce":
+    endian = ">"
+else:
+    raise SystemExit("Mach-O no reconocido")
+cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags = struct.unpack(
+    endian + "6I", data[4:28]
+)
+if not flags & 0x200000:
+    raise SystemExit("El binario de prueba no tiene MH_PIE")
+print("Prueba de FFmpeg con MH_PIE")
+PY
+then
+  fail "El binario de prueba contra FFmpeg no es PIE"
 fi
 file "$WORK/prueba"
 
