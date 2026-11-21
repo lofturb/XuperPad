@@ -153,6 +153,22 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   return YES;
 }
 
+- (void)setPaused:(BOOL)paused
+{
+  if (queue == NULL) {
+    return;
+  }
+  [queueLock lock];
+  if (queue != NULL) {
+    if (paused) {
+      AudioQueuePause(queue);
+    } else {
+      AudioQueueResume(queue);
+    }
+  }
+  [queueLock unlock];
+}
+
 - (void)enqueuePCM:(NSData *)pcm
 {
   if (pcm.length == 0 || queue == NULL) {

@@ -8,9 +8,12 @@
 #import <libavformat/avio.h>
 #import <libavutil/channel_layout.h>
 #import <libavutil/error.h>
+#import <libavutil/frame.h>
 #import <libavutil/log.h>
 #import <libswresample/swresample.h>
 #import <libswscale/swscale.h>
+
+#import <mach/mach.h>
 
 #import <stdarg.h>
 #import <stdint.h>
@@ -35,6 +38,16 @@ typedef struct {
 } XPFFmpegContext;
 
 @implementation XPVideoFrameData
+
+- (void)dealloc
+{
+  if (nativeFrame != NULL) {
+    AVFrame *frame = (AVFrame *)nativeFrame;
+    av_frame_free(&frame);
+    nativeFrame = NULL;
+  }
+}
+
 @end
 
 @interface XPDecoder () {
@@ -76,10 +89,21 @@ typedef struct {
   long long pcmSquareSum;
   long long pcmSampleCount;
   BOOL videoSizeReported;
+  XPVideoFrameData *pendingFrame;
+  BOOL pendingDeliveryScheduled;
+  NSLock *clockLock;
+  BOOL paused;
+  CFAbsoluteTime pauseStartedAt;
+  double frozenClock;
+  double streamDuration;
+  BOOL hasPendingSeek;
+  double pendingSeekTime;
+  BOOL directUploadActive;
 }
 
 - (void)decodeLoop;
 - (void)presentLoop;
+- (void)deliverPendingFrame;
 - (BOOL)openInput;
 - (void)closeInput;
 - (void)openAudioWithCodec:(const AVCodec *)audioCodec;
@@ -90,6 +114,7 @@ typedef struct {
 - (XPVideoFrameData *)yuvFrameFromFrame:(AVFrame *)frame;
 - (XPVideoFrameData *)rgbFrameFromFrame:(AVFrame *)frame;
 - (void)throttleIfNeeded;
+- (void)performPendingSeek;
 - (double)masterClock;
 - (void)updateClockHealth;
 - (void)reportVideoSize:(int)width height:(int)height;
@@ -106,6 +131,22 @@ static NSString *XPFFmpegErrorText(int code)
   memset(buffer, 0, sizeof(buffer));
   av_strerror(code, buffer, sizeof(buffer));
   return [NSString stringWithUTF8String:buffer] ?: @"desconocido";
+}
+
+static const NSUInteger XPVideoQueueLimit = 6;
+
+static double XPResidentMegabytes(void)
+{
+  mach_task_basic_info_data_t info;
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  kern_return_t result = task_info(mach_task_self(),
+                                   MACH_TASK_BASIC_INFO,
+                                   (task_info_t)&info,
+                                   &count);
+  if (result != KERN_SUCCESS) {
+    return 0.0;
+  }
+  return (double)info.resident_size / (1024.0 * 1024.0);
 }
 
 static NSData *XPCopyPlane(const uint8_t *source, int sourceStride, int width, int height)
@@ -192,6 +233,16 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     pcmSquareSum = 0;
     pcmSampleCount = 0;
     videoSizeReported = NO;
+    pendingFrame = nil;
+    pendingDeliveryScheduled = NO;
+    clockLock = [[NSLock alloc] init];
+    paused = NO;
+    pauseStartedAt = 0;
+    frozenClock = 0;
+    streamDuration = 0;
+    hasPendingSeek = NO;
+    pendingSeekTime = 0;
+    directUploadActive = NO;
   }
   return self;
 }
@@ -244,6 +295,15 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   pcmSquareSum = 0;
   pcmSampleCount = 0;
   videoSizeReported = NO;
+  pendingFrame = nil;
+  pendingDeliveryScheduled = NO;
+  paused = NO;
+  pauseStartedAt = 0;
+  frozenClock = 0;
+  streamDuration = 0;
+  hasPendingSeek = NO;
+  pendingSeekTime = 0;
+  directUploadActive = NO;
   running = YES;
   NSLog(@"[XuperPad] decodificador: inicio %@", address);
 
@@ -286,110 +346,122 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     XPFFmpegVerbose = NO;
     BOOL ended = NO;
     while (running) {
-      [self updateClockHealth];
-      [self throttleIfNeeded];
-      if (!running) {
-        break;
-      }
-      CFAbsoluteTime readStart = CFAbsoluteTimeGetCurrent();
-      int result = av_read_frame(state->format, state->packet);
-      double readElapsed = CFAbsoluteTimeGetCurrent() - readStart;
-      readSeconds += readElapsed;
-      if (readElapsed > slowestReadSeconds) {
-        slowestReadSeconds = readElapsed;
-      }
-      if (result < 0) {
-        ended = (result == AVERROR_EOF);
-        if (!ended) {
-          NSLog(@"[XuperPad] decodificador: av_read_frame fallo %d %@",
-                result, XPFFmpegErrorText(result));
+      @autoreleasepool {
+        [self performPendingSeek];
+        if (!running) {
+          break;
         }
-        break;
-      }
-      if (state->packet->stream_index == state->videoIndex) {
-        videoPacketCount++;
-        CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
-        [self decodeVideoPacket];
-        videoDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
-      } else if (state->packet->stream_index == state->audioIndex) {
-        audioPacketCount++;
-        CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
-        [self decodeAudioPacket];
-        audioDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
-      }
-      av_packet_unref(state->packet);
-
-      CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-      if (now - lastProgressAt >= 3.0) {
-        double window = now - lastProgressAt;
-        int64_t bytesRead = lastBytesRead;
-        if (state->format != NULL && state->format->pb != NULL) {
-          int64_t position = avio_tell(state->format->pb);
-          if (position >= 0) {
-            bytesRead = position;
+        if ([self isPaused]) {
+          [NSThread sleepForTimeInterval:0.05];
+          continue;
+        }
+        [self updateClockHealth];
+        [self throttleIfNeeded];
+        if (!running) {
+          break;
+        }
+        CFAbsoluteTime readStart = CFAbsoluteTimeGetCurrent();
+        int result = av_read_frame(state->format, state->packet);
+        double readElapsed = CFAbsoluteTimeGetCurrent() - readStart;
+        readSeconds += readElapsed;
+        if (readElapsed > slowestReadSeconds) {
+          slowestReadSeconds = readElapsed;
+        }
+        if (result < 0) {
+          ended = (result == AVERROR_EOF);
+          if (!ended) {
+            NSLog(@"[XuperPad] decodificador: av_read_frame fallo %d %@",
+                  result, XPFFmpegErrorText(result));
           }
+          break;
         }
-        double bytesDelta = (double)(bytesRead - lastBytesRead);
-        if (bytesDelta < 0) {
-          bytesDelta = 0;
+        if (state->packet->stream_index == state->videoIndex) {
+          videoPacketCount++;
+          CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
+          [self decodeVideoPacket];
+          videoDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
+        } else if (state->packet->stream_index == state->audioIndex) {
+          audioPacketCount++;
+          CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
+          [self decodeAudioPacket];
+          audioDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
         }
-        double framesDelta = (double)(frameCount - lastFrameCount);
-        [frameCondition lock];
-        NSUInteger queued = frames.count;
-        [frameCondition unlock];
-        double lag = latestPTS - [self masterClock];
-        double playedSound = 0;
-        double queuedSound = 0;
-        NSUInteger audioCallbacks = 0;
-        NSUInteger freeAudioBuffers = 0;
-        float meterPeak = 0;
-        float meterAverage = 0;
-        if (audioOutput != nil) {
-          playedSound = [audioOutput playedSeconds];
-          queuedSound = [audioOutput queuedSeconds];
-          audioCallbacks = [audioOutput callbackCount];
-          freeAudioBuffers = [audioOutput freeBufferCount];
-          meterPeak = [audioOutput meterPeak];
-          meterAverage = [audioOutput meterAverage];
+        av_packet_unref(state->packet);
+
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (now - lastProgressAt >= 3.0) {
+          double window = now - lastProgressAt;
+          int64_t bytesRead = lastBytesRead;
+          if (state->format != NULL && state->format->pb != NULL) {
+            int64_t position = avio_tell(state->format->pb);
+            if (position >= 0) {
+              bytesRead = position;
+            }
+          }
+          double bytesDelta = (double)(bytesRead - lastBytesRead);
+          if (bytesDelta < 0) {
+            bytesDelta = 0;
+          }
+          double framesDelta = (double)(frameCount - lastFrameCount);
+          [frameCondition lock];
+          NSUInteger queued = frames.count;
+          [frameCondition unlock];
+          double lag = latestPTS - [self masterClock];
+          double playedSound = 0;
+          double queuedSound = 0;
+          NSUInteger audioCallbacks = 0;
+          NSUInteger freeAudioBuffers = 0;
+          float meterPeak = 0;
+          float meterAverage = 0;
+          if (audioOutput != nil) {
+            playedSound = [audioOutput playedSeconds];
+            queuedSound = [audioOutput queuedSeconds];
+            audioCallbacks = [audioOutput callbackCount];
+            freeAudioBuffers = [audioOutput freeBufferCount];
+            meterPeak = [audioOutput meterPeak];
+            meterAverage = [audioOutput meterAverage];
+          }
+          double rms = 0;
+          if (pcmSampleCount > 0) {
+            rms = sqrt((double)pcmSquareSum / (double)pcmSampleCount);
+          }
+          NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs copia %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu retraso %.2fs sonido %.1fs en cola %.1fs libres %lu llamadas %lu pico %d rms %d medidor %.1f/%.1f memoria %.1f MB directo %d",
+                (unsigned long)videoPacketCount,
+                (unsigned long)audioPacketCount,
+                (unsigned long)frameCount,
+                framesDelta / window,
+                bytesDelta / 1024.0 / window,
+                readSeconds - lastReadSeconds,
+                videoDecodeSeconds - lastVideoDecodeSeconds,
+                scaleSeconds - lastScaleSeconds,
+                copySeconds - lastCopySeconds,
+                audioDecodeSeconds - lastAudioDecodeSeconds,
+                (double)bytesRead / (1024.0 * 1024.0),
+                slowestReadSeconds,
+                (unsigned long)queued,
+                lag,
+                playedSound,
+                queuedSound,
+                (unsigned long)freeAudioBuffers,
+                (unsigned long)audioCallbacks,
+                pcmPeak,
+                (int)rms,
+                meterPeak,
+                meterAverage,
+                XPResidentMegabytes(),
+                directUploadActive ? 1 : 0);
+          lastProgressAt = now;
+          lastBytesRead = bytesRead;
+          lastFrameCount = frameCount;
+          lastReadSeconds = readSeconds;
+          lastVideoDecodeSeconds = videoDecodeSeconds;
+          lastAudioDecodeSeconds = audioDecodeSeconds;
+          lastScaleSeconds = scaleSeconds;
+          lastCopySeconds = copySeconds;
+          pcmPeak = 0;
+          pcmSquareSum = 0;
+          pcmSampleCount = 0;
         }
-        double rms = 0;
-        if (pcmSampleCount > 0) {
-          rms = sqrt((double)pcmSquareSum / (double)pcmSampleCount);
-        }
-        NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs copia %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu retraso %.2fs sonido %.1fs en cola %.1fs libres %lu llamadas %lu pico %d rms %d medidor %.1f/%.1f",
-              (unsigned long)videoPacketCount,
-              (unsigned long)audioPacketCount,
-              (unsigned long)frameCount,
-              framesDelta / window,
-              bytesDelta / 1024.0 / window,
-              readSeconds - lastReadSeconds,
-              videoDecodeSeconds - lastVideoDecodeSeconds,
-              scaleSeconds - lastScaleSeconds,
-              copySeconds - lastCopySeconds,
-              audioDecodeSeconds - lastAudioDecodeSeconds,
-              (double)bytesRead / (1024.0 * 1024.0),
-              slowestReadSeconds,
-              (unsigned long)queued,
-              lag,
-              playedSound,
-              queuedSound,
-              (unsigned long)freeAudioBuffers,
-              (unsigned long)audioCallbacks,
-              pcmPeak,
-              (int)rms,
-              meterPeak,
-              meterAverage);
-        lastProgressAt = now;
-        lastBytesRead = bytesRead;
-        lastFrameCount = frameCount;
-        lastReadSeconds = readSeconds;
-        lastVideoDecodeSeconds = videoDecodeSeconds;
-        lastAudioDecodeSeconds = audioDecodeSeconds;
-        lastScaleSeconds = scaleSeconds;
-        lastCopySeconds = copySeconds;
-        pcmPeak = 0;
-        pcmSquareSum = 0;
-        pcmSampleCount = 0;
       }
     }
     BOOL cancelled = !running;
@@ -414,13 +486,41 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       if (frame == nil) {
         continue;
       }
-      dispatch_async(dispatch_get_main_queue(), ^{
-        id<XPDecoderDelegate> delegate = self.delegate;
-        if (delegate != nil) {
-          [delegate decoder:self didProduceVideoFrame:frame];
-        }
-      });
+      [frameCondition lock];
+      if (pendingFrame != nil) {
+        XPVideoFrameData *dropped = pendingFrame;
+        pendingFrame = nil;
+        dropped = nil;
+      }
+      pendingFrame = frame;
+      BOOL schedule = !pendingDeliveryScheduled;
+      if (schedule) {
+        pendingDeliveryScheduled = YES;
+      }
+      [frameCondition unlock];
+      if (schedule) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self deliverPendingFrame];
+        });
+      }
     }
+  }
+}
+
+- (void)deliverPendingFrame
+{
+  [frameCondition lock];
+  XPVideoFrameData *frame = pendingFrame;
+  pendingFrame = nil;
+  pendingDeliveryScheduled = NO;
+  [frameCondition unlock];
+
+  if (frame == nil) {
+    return;
+  }
+  id<XPDecoderDelegate> delegate = self.delegate;
+  if (delegate != nil) {
+    [delegate decoder:self didProduceVideoFrame:frame];
   }
 }
 
@@ -464,6 +564,14 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
 
 - (double)masterClock
 {
+  [clockLock lock];
+  if (paused) {
+    double frozen = frozenClock;
+    [clockLock unlock];
+    return frozen;
+  }
+  [clockLock unlock];
+
   if (hasAudioStart && audioOutput != nil && audioClockHealthy) {
     return audioStartPTS + [audioOutput playedSeconds];
   }
@@ -473,8 +581,115 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   return 0;
 }
 
+- (BOOL)isPaused
+{
+  [clockLock lock];
+  BOOL value = paused;
+  [clockLock unlock];
+  return value;
+}
+
+- (void)setPaused:(BOOL)value
+{
+  if ([self isPaused] == value) {
+    return;
+  }
+  double current = [self masterClock];
+  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  [clockLock lock];
+  paused = value;
+  if (value) {
+    frozenClock = current;
+    pauseStartedAt = now;
+  } else {
+    videoWall += now - pauseStartedAt;
+  }
+  [clockLock unlock];
+  [audioOutput setPaused:value];
+  NSLog(@"[XuperPad] decodificador: %@", value ? @"pausa" : @"reanudacion");
+}
+
+- (double)duration
+{
+  [clockLock lock];
+  double value = streamDuration;
+  [clockLock unlock];
+  return value;
+}
+
+- (double)currentTime
+{
+  double clock = [self masterClock];
+  [clockLock lock];
+  double start = videoStartPTS;
+  [clockLock unlock];
+  double value = clock - start;
+  if (value < 0) {
+    value = 0;
+  }
+  return value;
+}
+
+- (BOOL)seekToTime:(double)seconds
+{
+  if (!running) {
+    return NO;
+  }
+  if (seconds < 0) {
+    seconds = 0;
+  }
+  [clockLock lock];
+  pendingSeekTime = seconds;
+  hasPendingSeek = YES;
+  [clockLock unlock];
+  return YES;
+}
+
+- (void)performPendingSeek
+{
+  [clockLock lock];
+  BOOL wanted = hasPendingSeek;
+  double target = pendingSeekTime;
+  hasPendingSeek = NO;
+  [clockLock unlock];
+
+  if (!wanted) {
+    return;
+  }
+  if (state == NULL || state->format == NULL) {
+    return;
+  }
+  int64_t position = (int64_t)(target * (double)AV_TIME_BASE);
+  int result = av_seek_frame(state->format, -1, position, AVSEEK_FLAG_BACKWARD);
+  if (result < 0) {
+    NSLog(@"[XuperPad] decodificador: no se pudo buscar a %.1fs (%d %@)",
+          target, result, XPFFmpegErrorText(result));
+    return;
+  }
+  if (state->video != NULL) {
+    avcodec_flush_buffers(state->video);
+  }
+  if (state->audio != NULL) {
+    avcodec_flush_buffers(state->audio);
+  }
+  [frameCondition lock];
+  [frames removeAllObjects];
+  [frameCondition unlock];
+  [clockLock lock];
+  hasVideoStart = NO;
+  hasAudioStart = NO;
+  videoStartPTS = 0;
+  audioStartPTS = 0;
+  videoWall = CFAbsoluteTimeGetCurrent();
+  [clockLock unlock];
+  NSLog(@"[XuperPad] decodificador: busqueda aplicada en %.1fs", target);
+}
+
 - (void)updateClockHealth
 {
+  if ([self isPaused]) {
+    return;
+  }
   if (!hasAudioStart || audioOutput == nil) {
     audioClockHealthy = NO;
     return;
@@ -581,6 +796,11 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
         formatName,
         format->duration / (double)AV_TIME_BASE,
         CFAbsoluteTimeGetCurrent() - openStart);
+  [clockLock lock];
+  streamDuration = format->duration > 0
+    ? (double)format->duration / (double)AV_TIME_BASE
+    : 0;
+  [clockLock unlock];
 
   AVCodec *videoCodec = NULL;
   state->videoIndex = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, &videoCodec, 0);
@@ -744,6 +964,8 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       latestPTS = pts;
     }
 
+    int frameWidth = frame->width;
+    int frameHeight = frame->height;
     XPVideoFrameData *output = nil;
     if (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUVJ420P) {
       output = [self yuvFrameFromFrame:frame];
@@ -756,7 +978,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     }
     if (!videoSizeReported) {
       videoSizeReported = YES;
-      [self reportVideoSize:frame->width height:frame->height];
+      [self reportVideoSize:frameWidth height:frameHeight];
     }
     av_frame_unref(frame);
   }
@@ -764,10 +986,43 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
 
 - (XPVideoFrameData *)yuvFrameFromFrame:(AVFrame *)frame
 {
-  int chromaWidth = (frame->width + 1) / 2;
-  int chromaHeight = (frame->height + 1) / 2;
+  int width = frame->width;
+  int height = frame->height;
+  int chromaWidth = (width + 1) / 2;
+  int chromaHeight = (height + 1) / 2;
+  if (frame->data[0] == NULL || frame->data[1] == NULL || frame->data[2] == NULL) {
+    return nil;
+  }
+  BOOL tight = frame->linesize[0] == width
+            && frame->linesize[1] == chromaWidth
+            && frame->linesize[2] == chromaWidth;
+  if (tight) {
+    AVFrame *owned = av_frame_alloc();
+    if (owned == NULL) {
+      return nil;
+    }
+    av_frame_move_ref(owned, frame);
+    XPVideoFrameData *result = [[XPVideoFrameData alloc] init];
+    result.directUpload = YES;
+    result.nativeFrame = owned;
+    result.lumaPointer = owned->data[0];
+    result.chromaUPointer = owned->data[1];
+    result.chromaVPointer = owned->data[2];
+    result.lumaStride = owned->linesize[0];
+    result.chromaStride = owned->linesize[1];
+    result.width = width;
+    result.height = height;
+    result.chromaWidth = chromaWidth;
+    result.chromaHeight = chromaHeight;
+    if (!directUploadActive) {
+      directUploadActive = YES;
+      NSLog(@"[XuperPad] decodificador: planos enviados sin copia, ancho de linea %d", owned->linesize[0]);
+    }
+    return result;
+  }
+
   CFAbsoluteTime copyStart = CFAbsoluteTimeGetCurrent();
-  NSData *luma = XPCopyPlane(frame->data[0], frame->linesize[0], frame->width, frame->height);
+  NSData *luma = XPCopyPlane(frame->data[0], frame->linesize[0], width, height);
   NSData *chromaU = XPCopyPlane(frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
   NSData *chromaV = XPCopyPlane(frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
   copySeconds += CFAbsoluteTimeGetCurrent() - copyStart;
@@ -778,8 +1033,8 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   result.luma = luma;
   result.chromaU = chromaU;
   result.chromaV = chromaV;
-  result.width = frame->width;
-  result.height = frame->height;
+  result.width = width;
+  result.height = height;
   result.chromaWidth = chromaWidth;
   result.chromaHeight = chromaHeight;
   return result;
@@ -941,8 +1196,10 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
   [frameCondition lock];
   [frames addObject:frame];
-  while (frames.count > 16) {
+  while (frames.count > XPVideoQueueLimit) {
+    XPVideoFrameData *dropped = frames.firstObject;
     [frames removeObjectAtIndex:0];
+    dropped = nil;
   }
   [frameCondition unlock];
   [self broadcastFrames];
@@ -996,6 +1253,15 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
 
 - (void)closeInput
 {
+  [frameCondition lock];
+  [frames removeAllObjects];
+  if (pendingFrame != nil) {
+    XPVideoFrameData *dropped = pendingFrame;
+    pendingFrame = nil;
+    dropped = nil;
+  }
+  [frameCondition unlock];
+
   if (state == NULL) {
     return;
   }

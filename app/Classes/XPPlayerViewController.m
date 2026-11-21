@@ -10,23 +10,38 @@
 #import "XPDecoder.h"
 #import "XPGLView.h"
 #import "XPStatusView.h"
-#import "XPBackControl.h"
+#import "XPStreamResolver.h"
+#import "XPChapterBar.h"
+#import "XPPlayerControls.h"
 #import "XPTheme.h"
 
-static const NSTimeInterval XPPlayerStartTimeout = 45.0;
+#import <math.h>
 
-@interface XPPlayerViewController () <XPDecoderDelegate>
+static const NSTimeInterval XPPlayerStartTimeout = 45.0;
+static const NSTimeInterval XPPlayerControlsTimeout = 3.5;
+static const NSTimeInterval XPPlayerRefreshInterval = 0.5;
+static const NSTimeInterval XPPlayerToastTimeout = 2.4;
+static const CGFloat XPPlayerChapterBarHeight = 84.0f;
+static const double XPPlayerChapterRestartLimit = 8.0;
+
+@interface XPPlayerViewController () <XPDecoderDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, strong) AVPlayer *player;
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
 @property (nonatomic, strong) XPGLView *glView;
 @property (nonatomic, strong) XPDecoder *decoder;
-@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) XPPlayerControls *controls;
+@property (nonatomic, strong) XPChapterBar *chapterBar;
 @property (nonatomic, strong) XPStatusView *statusView;
-@property (nonatomic, strong) XPBackControl *backControl;
+@property (nonatomic, strong) UILabel *toastLabel;
 @property (nonatomic, assign) NSUInteger currentIndex;
 @property (nonatomic, strong) NSMutableArray *addressQueue;
 @property (nonatomic, assign) BOOL observing;
 @property (nonatomic, strong) NSTimer *startTimeout;
+@property (nonatomic, strong) NSTimer *refreshTimer;
+@property (nonatomic, strong) NSTimer *toastTimer;
+@property (nonatomic, assign) BOOL userPaused;
+@property (nonatomic, assign) BOOL chapterBarVisible;
+@property (nonatomic, strong) NSDate *lastInteraction;
 @end
 
 @implementation XPPlayerViewController
@@ -59,22 +74,6 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
   self.glView.hidden = YES;
   [self.view addSubview:self.glView];
 
-  self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-  self.titleLabel.font = XPFontMedium(13.0f);
-  self.titleLabel.textColor = XPColorTextPrimary();
-  self.titleLabel.backgroundColor = [XPColorSurface() colorWithAlphaComponent:0.72f];
-  self.titleLabel.textAlignment = NSTextAlignmentCenter;
-  self.titleLabel.text = self.titleText ?: @"";
-  self.titleLabel.numberOfLines = 1;
-  self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  [self.view addSubview:self.titleLabel];
-
-  self.backControl = [[XPBackControl alloc] initWithFrame:CGRectZero];
-  [self.backControl addTarget:self
-                        action:@selector(closeTapped:)
-              forControlEvents:UIControlEventTouchUpInside];
-  [self.view addSubview:self.backControl];
-
   self.statusView = [[XPStatusView alloc] initWithFrame:self.view.bounds];
   self.statusView.backgroundColor = [UIColor clearColor];
   __weak XPPlayerViewController *weakSelf = self;
@@ -83,9 +82,61 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
   };
   [self.view addSubview:self.statusView];
 
+  self.chapterBar = [[XPChapterBar alloc] initWithFrame:CGRectZero];
+  self.chapterBar.alpha = 0.0f;
+  self.chapterBar.hidden = YES;
+  __weak XPPlayerViewController *weakChapterSelf = self;
+  self.chapterBar.previousHandler = ^{
+    [weakChapterSelf previousChapterTapped];
+  };
+  self.chapterBar.nextHandler = ^{
+    [weakChapterSelf nextChapterTapped];
+  };
+  self.chapterBar.selectionHandler = ^(NSInteger index) {
+    [weakChapterSelf chapterSelectedAtIndex:index];
+  };
+  [self.view addSubview:self.chapterBar];
+
+  self.controls = [[XPPlayerControls alloc] initWithFrame:self.view.bounds];
+  self.controls.liveStream = self.chapters.count == 0;
+  self.controls.closeHandler = ^{
+    [weakSelf closeTapped:nil];
+  };
+  self.controls.playPauseHandler = ^{
+    [weakSelf togglePlayPause];
+  };
+  self.controls.previousChapterHandler = ^{
+    [weakSelf previousChapterTapped];
+  };
+  self.controls.nextChapterHandler = ^{
+    [weakSelf nextChapterTapped];
+  };
+  self.controls.moreHandler = ^{
+    [weakSelf toggleChapterBar];
+  };
+  self.controls.seekHandler = ^(float fraction) {
+    [weakSelf seekToFraction:fraction];
+  };
+  [self.view addSubview:self.controls];
+
+  UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                         action:@selector(toggleControls)];
+  tap.delegate = self;
+  [self.view addGestureRecognizer:tap];
+
   self.addressQueue = [self buildAddressQueue];
+  self.chapterBar.chapters = self.chapters;
+  self.chapterBar.currentIndex = self.currentChapterIndex;
+  [self updateChapterLabels];
 
   [self startPlayback];
+  [self showControls];
+
+  self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:XPPlayerRefreshInterval
+                                                        target:self
+                                                      selector:@selector(refreshInterface)
+                                                      userInfo:nil
+                                                       repeats:YES];
 }
 
 - (NSMutableArray *)buildAddressQueue
@@ -131,10 +182,19 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
   self.playerLayer.frame = self.view.bounds;
   self.glView.frame = self.view.bounds;
   self.statusView.frame = self.view.bounds;
-  self.backControl.frame = CGRectMake(12.0f, 12.0f, 34.0f, 34.0f);
-  self.titleLabel.frame = CGRectMake(56.0f, 14.0f, MAX(40.0f, width - 68.0f), 30.0f);
-  self.titleLabel.layer.cornerRadius = 8.0f;
-  self.titleLabel.layer.masksToBounds = YES;
+  self.controls.frame = self.view.bounds;
+
+  CGFloat barBottom = height - 92.0f;
+  CGFloat barTop = barBottom - XPPlayerChapterBarHeight;
+  if (barTop < 56.0f) {
+    barTop = 56.0f;
+    barBottom = barTop + XPPlayerChapterBarHeight;
+  }
+  self.chapterBar.frame = CGRectMake(0.0f, barTop, width, XPPlayerChapterBarHeight);
+  self.toastLabel.frame = CGRectMake((width - 280.0f) / 2.0f,
+                                     barTop - 44.0f,
+                                     280.0f,
+                                     30.0f);
 }
 
 - (void)viewWillDisappear:(BOOL)animated
@@ -164,6 +224,8 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
     headers = @{};
   }
 
+  self.userPaused = NO;
+  self.controls.playing = YES;
   [self.statusView showLoading];
 
   BOOL software = [self needsSoftwareDecoderForEntry:entry];
@@ -342,6 +404,342 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
   [self.navigationController popViewControllerAnimated:YES];
 }
 
+- (double)elapsedSeconds
+{
+  if (self.decoder != nil) {
+    return self.decoder.currentTime;
+  }
+  if (self.player != nil) {
+    NSTimeInterval value = CMTimeGetSeconds(self.player.currentTime);
+    if (isnan(value)) {
+      return 0.0;
+    }
+    return value;
+  }
+  return 0.0;
+}
+
+- (double)totalSeconds
+{
+  if (self.decoder != nil) {
+    return self.decoder.duration;
+  }
+  if (self.player != nil && self.player.currentItem != nil) {
+    NSTimeInterval value = CMTimeGetSeconds(self.player.currentItem.duration);
+    if (isnan(value)) {
+      return 0.0;
+    }
+    return value;
+  }
+  return 0.0;
+}
+
+- (void)togglePlayPause
+{
+  if (self.decoder != nil) {
+    self.userPaused = !self.userPaused;
+    self.decoder.paused = self.userPaused;
+  } else if (self.player != nil) {
+    if (self.player.rate > 0.0f) {
+      [self.player pause];
+      self.userPaused = YES;
+    } else {
+      [self.player play];
+      self.userPaused = NO;
+    }
+  }
+  self.controls.playing = !self.userPaused;
+  [self showControls];
+}
+
+- (void)seekToFraction:(float)fraction
+{
+  double total = [self totalSeconds];
+  if (total <= 0.0) {
+    [self showTransientMessage:@"La búsqueda no está disponible en este contenido"];
+    [self showControls];
+    return;
+  }
+  double target = total * (double)MAX(0.0f, MIN(1.0f, fraction));
+  if (self.decoder != nil) {
+    if (![self.decoder seekToTime:target]) {
+      [self showTransientMessage:@"No se pudo buscar en este contenido"];
+    }
+  } else if (self.player != nil) {
+    CMTime time = CMTimeMakeWithSeconds(target, 600);
+    [self.player seekToTime:time];
+  }
+  [self showControls];
+}
+
+- (void)previousChapterTapped
+{
+  if (self.chapters.count == 0) {
+    return;
+  }
+  if ([self elapsedSeconds] > XPPlayerChapterRestartLimit) {
+    [self seekToFraction:0.0f];
+    [self showTransientMessage:@"Repitiendo el capítulo actual"];
+    return;
+  }
+  NSInteger index = self.currentChapterIndex - 1;
+  if (index < 0) {
+    index = 0;
+    [self seekToFraction:0.0f];
+    return;
+  }
+  [self openChapterAtIndex:index];
+}
+
+- (void)nextChapterTapped
+{
+  if (self.chapters.count == 0) {
+    return;
+  }
+  NSInteger index = self.currentChapterIndex + 1;
+  if (index >= (NSInteger)self.chapters.count) {
+    [self showTransientMessage:@"Es el último capítulo disponible"];
+    return;
+  }
+  [self openChapterAtIndex:index];
+}
+
+- (void)chapterSelectedAtIndex:(NSInteger)index
+{
+  if (index == self.currentChapterIndex) {
+    [self seekToFraction:0.0f];
+    return;
+  }
+  [self openChapterAtIndex:index];
+}
+
+- (void)openChapterAtIndex:(NSInteger)index
+{
+  if (index < 0 || index >= (NSInteger)self.chapters.count) {
+    return;
+  }
+  id item = self.chapters[index];
+  if (![item isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+  NSDictionary *chapter = (NSDictionary *)item;
+  id rawId = chapter[@"id"];
+  if (![rawId isKindOfClass:[NSString class]] || [rawId length] == 0) {
+    [self showTransientMessage:@"El capítulo no tiene una dirección reproducible"];
+    return;
+  }
+  NSString *episodeId = (NSString *)rawId;
+  NSString *title = self.seriesName.length > 0 ? self.seriesName : self.titleText;
+
+  [self.statusView showLoading];
+  __weak XPPlayerViewController *weakSelf = self;
+  [XPStreamResolver resolveOnDemandForTitle:episodeId
+                                   seriesId:self.seriesId
+                                      title:title
+                                 completion:^(NSDictionary *stream, NSError *error) {
+    XPPlayerViewController *strongSelf = weakSelf;
+    if (strongSelf == nil) {
+      return;
+    }
+    if (stream == nil) {
+      [strongSelf.statusView showMessage:error.localizedDescription ?: @"No se pudo abrir el capítulo"
+                                    retry:YES];
+      return;
+    }
+    strongSelf.currentChapterIndex = index;
+    [strongSelf applyStream:stream];
+    [strongSelf updateChapterLabels];
+    strongSelf.chapterBar.currentIndex = index;
+    [strongSelf startPlayback];
+  }];
+}
+
+- (void)applyStream:(NSDictionary *)stream
+{
+  self.streamAddress = stream[@"url"];
+  self.streamHeaders = stream[@"headers"];
+  self.streamType = stream[@"mime"];
+  self.streamCodec = stream[@"codec"];
+  self.streamFormat = stream[@"format"];
+  NSArray *backups = stream[@"backupUrls"];
+  self.backupAddresses = [backups isKindOfClass:[NSArray class]] ? backups : @[];
+  self.addressQueue = [self buildAddressQueue];
+  self.currentIndex = 0;
+}
+
+- (NSString *)chapterTitleAtIndex:(NSInteger)index
+{
+  if (index < 0 || index >= (NSInteger)self.chapters.count) {
+    return @"";
+  }
+  id item = self.chapters[index];
+  if (![item isKindOfClass:[NSDictionary class]]) {
+    return @"";
+  }
+  NSDictionary *chapter = (NSDictionary *)item;
+  id name = chapter[@"name"];
+  if ([name isKindOfClass:[NSString class]] && [name length] > 0) {
+    return (NSString *)name;
+  }
+  id number = chapter[@"number"];
+  if ([number isKindOfClass:[NSNumber class]] && [number integerValue] > 0) {
+    return [NSString stringWithFormat:@"Capítulo %ld", (long)[number integerValue]];
+  }
+  return [NSString stringWithFormat:@"Capítulo %ld", (long)(index + 1)];
+}
+
+- (void)updateChapterLabels
+{
+  NSString *title = self.seriesName.length > 0 ? self.seriesName : self.titleText;
+  self.controls.titleText = title ?: @"";
+  self.controls.subtitleText = [self chapterTitleAtIndex:self.currentChapterIndex];
+}
+
+- (void)refreshInterface
+{
+  double elapsed = [self elapsedSeconds];
+  double total = [self totalSeconds];
+  self.controls.elapsedTime = elapsed;
+  self.controls.duration = total;
+  float progress = 0.0f;
+  if (total > 0.0) {
+    progress = (float)(elapsed / total);
+  }
+  self.controls.progress = MAX(0.0f, MIN(1.0f, progress));
+  self.controls.playing = !self.userPaused;
+
+  if (!self.controls.hidden && !self.chapterBarVisible && self.lastInteraction != nil) {
+    NSTimeInterval idle = [[NSDate date] timeIntervalSinceDate:self.lastInteraction];
+    if (idle > XPPlayerControlsTimeout) {
+      [self hideControls];
+    }
+  }
+}
+
+- (void)showControls
+{
+  self.lastInteraction = [NSDate date];
+  if (self.controls.hidden) {
+    self.controls.hidden = NO;
+    self.controls.alpha = 0.0f;
+  }
+  [UIView animateWithDuration:0.18 animations:^{
+    self.controls.alpha = 1.0f;
+  }];
+}
+
+- (void)hideControls
+{
+  if (self.chapterBarVisible) {
+    return;
+  }
+  [UIView animateWithDuration:0.25 animations:^{
+    self.controls.alpha = 0.0f;
+  } completion:^(BOOL finished) {
+    if (finished) {
+      self.controls.hidden = YES;
+    }
+  }];
+}
+
+- (void)toggleControls
+{
+  if (!self.controls.hidden) {
+    [self setChapterBarVisible:NO];
+    [UIView animateWithDuration:0.25 animations:^{
+      self.controls.alpha = 0.0f;
+    } completion:^(BOOL finished) {
+      if (finished) {
+        self.controls.hidden = YES;
+      }
+    }];
+    return;
+  }
+  [self showControls];
+}
+
+- (void)toggleChapterBar
+{
+  if (self.chapters.count == 0) {
+    [self showTransientMessage:@"Este contenido no tiene capítulos disponibles"];
+    [self showControls];
+    return;
+  }
+  [self setChapterBarVisible:!self.chapterBarVisible];
+  [self showControls];
+}
+
+- (void)setChapterBarVisible:(BOOL)visible
+{
+  self.chapterBarVisible = visible;
+  if (visible) {
+    self.chapterBar.hidden = NO;
+    [UIView animateWithDuration:0.2 animations:^{
+      self.chapterBar.alpha = 1.0f;
+    }];
+    return;
+  }
+  [UIView animateWithDuration:0.2 animations:^{
+    self.chapterBar.alpha = 0.0f;
+  } completion:^(BOOL finished) {
+    if (finished) {
+      self.chapterBar.hidden = YES;
+    }
+  }];
+}
+
+- (void)showTransientMessage:(NSString *)message
+{
+  if (self.toastLabel == nil) {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.font = XPFontCaption(11.5f);
+    label.textColor = XPColorTextPrimary();
+    label.textAlignment = NSTextAlignmentCenter;
+    label.numberOfLines = 1;
+    label.backgroundColor = [XPColorSurfaceAlt() colorWithAlphaComponent:0.95f];
+    label.layer.cornerRadius = 15.0f;
+    label.layer.masksToBounds = YES;
+    label.alpha = 0.0f;
+    [self.view addSubview:label];
+    self.toastLabel = label;
+    [self.view setNeedsLayout];
+  }
+  self.toastLabel.text = message ?: @"";
+  [self.view bringSubviewToFront:self.toastLabel];
+  [UIView animateWithDuration:0.2 animations:^{
+    self.toastLabel.alpha = 1.0f;
+  }];
+  [self.toastTimer invalidate];
+  self.toastTimer = [NSTimer scheduledTimerWithTimeInterval:XPPlayerToastTimeout
+                                                      target:self
+                                                    selector:@selector(hideToast:)
+                                                    userInfo:nil
+                                                     repeats:NO];
+}
+
+- (void)hideToast:(NSTimer *)timer
+{
+  self.toastTimer = nil;
+  [UIView animateWithDuration:0.25 animations:^{
+    self.toastLabel.alpha = 0.0f;
+  }];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+        shouldReceiveTouch:(UITouch *)touch
+{
+  UIView *view = touch.view;
+  if (view == nil) {
+    return YES;
+  }
+  if ([view isDescendantOfView:self.controls] ||
+      [view isDescendantOfView:self.chapterBar] ||
+      [view isDescendantOfView:self.statusView]) {
+    return NO;
+  }
+  return YES;
+}
+
 - (void)decoder:(XPDecoder *)decoder didOpenVideoWithWidth:(int)width height:(int)height
 {
   if (decoder != self.decoder) {
@@ -380,6 +778,9 @@ static const NSTimeInterval XPPlayerStartTimeout = 45.0;
 
 - (void)dealloc
 {
+  [self.refreshTimer invalidate];
+  [self.toastTimer invalidate];
+  [self.startTimeout invalidate];
   [self stopPlayback];
 }
 

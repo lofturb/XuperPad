@@ -3,6 +3,7 @@
 @interface XPAudioOutput : NSObject
 
 - (BOOL)startWithSampleRate:(int)sampleRate channels:(int)channels;
+- (void)setPaused:(BOOL)paused;
 - (void)enqueuePCM:(NSData *)pcm;
 - (double)queuedSeconds;
 - (double)playedSeconds;

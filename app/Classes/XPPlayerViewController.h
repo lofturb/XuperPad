@@ -29,6 +29,18 @@
 /// Formato del archivo de video declarado por el portal.
 @property (nonatomic, copy) NSString *streamFormat;
 
+/// Identificador de la serie a la que pertenece el capitulo.
+@property (nonatomic, copy) NSString *seriesId;
+
+/// Nombre de la serie a la que pertenece el capitulo.
+@property (nonatomic, copy) NSString *seriesName;
+
+/// Lista de capitulos disponibles para navegar.
+@property (nonatomic, copy) NSArray *chapters;
+
+/// Indice del capitulo que se esta reproduciendo.
+@property (nonatomic, assign) NSInteger currentChapterIndex;
+
 /// Crea el reproductor con los datos de una direccion resuelta.
 + (instancetype)playerWithStream:(NSDictionary *)stream;
 

@@ -426,6 +426,26 @@
     }
     [weakSelf.statusView hideStatus];
     XPPlayerViewController *player = [XPPlayerViewController playerWithStream:stream];
+    player.seriesId = seriesId;
+    player.seriesName = titleName;
+
+    NSArray *chapters = [weakSelf.episodes copy] ?: @[];
+    NSInteger chapterIndex = 0;
+    for (NSUInteger index = 0; index < chapters.count; index++) {
+      id item = chapters[index];
+      if (![item isKindOfClass:[NSDictionary class]]) {
+        continue;
+      }
+      id candidate = ((NSDictionary *)item)[@"id"];
+      if ([candidate isKindOfClass:[NSString class]] &&
+          [candidate isEqualToString:episodeId]) {
+        chapterIndex = (NSInteger)index;
+        break;
+      }
+    }
+    player.chapters = chapters;
+    player.currentChapterIndex = chapterIndex;
+
     [weakSelf.navigationController pushViewController:player animated:YES];
   }];
 }

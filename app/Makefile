@@ -37,6 +37,8 @@ XuperPad_FILES = main.m \
 	Classes/XPCatalogViewController.m \
 	Classes/XPDetailViewController.m \
 	Classes/XPPlayerViewController.m \
+	Classes/XPPlayerControls.m \
+	Classes/XPChapterBar.m \
 	Classes/XPDecoder.m \
 	Classes/XPGLView.m \
 	Classes/XPAudioOutput.m \

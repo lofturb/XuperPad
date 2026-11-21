@@ -13,6 +13,13 @@
 @property (nonatomic, assign) int chromaWidth;
 @property (nonatomic, assign) int chromaHeight;
 @property (nonatomic, assign) double pts;
+@property (nonatomic, assign) BOOL directUpload;
+@property (nonatomic, assign) const void *lumaPointer;
+@property (nonatomic, assign) const void *chromaUPointer;
+@property (nonatomic, assign) const void *chromaVPointer;
+@property (nonatomic, assign) int lumaStride;
+@property (nonatomic, assign) int chromaStride;
+@property (nonatomic, assign) void *nativeFrame;
 @end
 
 @protocol XPDecoderDelegate <NSObject>
@@ -26,9 +33,13 @@
 
 @property (nonatomic, weak) id<XPDecoderDelegate> delegate;
 @property (nonatomic, assign) CGSize presentationSize;
+@property (nonatomic, assign, getter=isPaused) BOOL paused;
+@property (nonatomic, readonly) double duration;
+@property (nonatomic, readonly) double currentTime;
 
 - (BOOL)startWithAddress:(NSString *)address headers:(NSDictionary *)headers;
 - (void)stop;
 - (BOOL)isRunning;
+- (BOOL)seekToTime:(double)seconds;
 
 @end

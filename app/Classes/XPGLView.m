@@ -78,7 +78,7 @@ static NSString *const XPGLFragmentShader =
 - (BOOL)compileShader:(NSString *)source type:(GLenum)type output:(GLuint *)shader;
 - (void)drawQuadUsingYuv:(BOOL)useYuv;
 - (void)uploadRGB:(NSData *)data width:(int)width height:(int)height;
-- (void)uploadLuma:(NSData *)data width:(int)width height:(int)height;
+- (void)uploadLuma:(XPVideoFrameData *)frame;
 - (void)uploadChroma:(XPVideoFrameData *)data;
 
 @end
@@ -149,7 +149,16 @@ static NSString *const XPGLFragmentShader =
   if (frame == nil) {
     return;
   }
-  if (frame.luma != nil && frame.chromaU != nil && frame.chromaV != nil) {
+  if (frame.directUpload) {
+    if (frame.width <= 0 || frame.height <= 0 ||
+        frame.chromaWidth <= 0 || frame.chromaHeight <= 0 ||
+        frame.lumaPointer == NULL || frame.chromaUPointer == NULL ||
+        frame.chromaVPointer == NULL ||
+        frame.lumaStride != frame.width ||
+        frame.chromaStride != frame.chromaWidth) {
+      return;
+    }
+  } else if (frame.luma != nil && frame.chromaU != nil && frame.chromaV != nil) {
     if (frame.width <= 0 || frame.height <= 0 ||
         frame.chromaWidth <= 0 || frame.chromaHeight <= 0) {
       return;
@@ -191,10 +200,11 @@ static NSString *const XPGLFragmentShader =
   glClear(GL_COLOR_BUFFER_BIT);
   XPVideoFrameData *data = frameData;
   if (data != nil && programReady && framePixelWidth > 0 && framePixelHeight > 0) {
-    BOOL useYuv = data.luma != nil && data.chromaU != nil && data.chromaV != nil;
+    BOOL useYuv = data.directUpload ||
+                  (data.luma != nil && data.chromaU != nil && data.chromaV != nil);
     if (needsUpload) {
       if (useYuv) {
-        [self uploadLuma:data.luma width:framePixelWidth height:framePixelHeight];
+        [self uploadLuma:data];
         [self uploadChroma:data];
       } else if (data.rgb != nil) {
         [self uploadRGB:data.rgb width:framePixelWidth height:framePixelHeight];
@@ -235,8 +245,14 @@ static NSString *const XPGLFragmentShader =
                   data.bytes);
 }
 
-- (void)uploadLuma:(NSData *)data width:(int)width height:(int)height
+- (void)uploadLuma:(XPVideoFrameData *)frame
 {
+  int width = frame.width;
+  int height = frame.height;
+  const void *bytes = frame.directUpload ? frame.lumaPointer : frame.luma.bytes;
+  if (bytes == NULL || width <= 0 || height <= 0) {
+    return;
+  }
   glBindTexture(GL_TEXTURE_2D, lumaTexture);
   if (lumaTextureWidth != width || lumaTextureHeight != height) {
     glTexImage2D(GL_TEXTURE_2D,
@@ -260,11 +276,16 @@ static NSString *const XPGLFragmentShader =
                   height,
                   GL_LUMINANCE,
                   GL_UNSIGNED_BYTE,
-                  data.bytes);
+                  bytes);
 }
 
 - (void)uploadChroma:(XPVideoFrameData *)data
 {
+  const void *uBytes = data.directUpload ? data.chromaUPointer : data.chromaU.bytes;
+  const void *vBytes = data.directUpload ? data.chromaVPointer : data.chromaV.bytes;
+  if (uBytes == NULL || vBytes == NULL) {
+    return;
+  }
   if (chromaTextureWidth != data.chromaWidth || chromaTextureHeight != data.chromaHeight) {
     glBindTexture(GL_TEXTURE_2D, chromaUTexture);
     glTexImage2D(GL_TEXTURE_2D,
@@ -299,7 +320,7 @@ static NSString *const XPGLFragmentShader =
                   data.chromaHeight,
                   GL_LUMINANCE,
                   GL_UNSIGNED_BYTE,
-                  data.chromaU.bytes);
+                  uBytes);
   glBindTexture(GL_TEXTURE_2D, chromaVTexture);
   glTexSubImage2D(GL_TEXTURE_2D,
                   0,
@@ -309,7 +330,7 @@ static NSString *const XPGLFragmentShader =
                   data.chromaHeight,
                   GL_LUMINANCE,
                   GL_UNSIGNED_BYTE,
-                  data.chromaV.bytes);
+                  vBytes);
 }
 
 - (void)drawQuadUsingYuv:(BOOL)useYuv
