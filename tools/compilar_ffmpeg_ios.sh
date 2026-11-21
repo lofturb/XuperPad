@@ -11,8 +11,13 @@ SDK10="${SDK10:-$THEOS/sdks/iPhoneOS10.3.sdk}"
 TOOLCHAIN="${TOOLCHAIN:-$THEOS/toolchain/linux/iphone}"
 OUT="${OUT:-app/vendor/ffmpeg}"
 WORK="${WORK:-${RUNNER_TEMP:-/tmp}/xuper-ffmpeg}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GENERADOR="$SCRIPT_DIR/generator_libsystem_tbd.py"
+PYTHON="${PYTHON:-python3}"
 TARGET="armv7-apple-ios9.0"
 MIN_IOS="9.0"
+LIBC_TBD="libxuperlibc.tbd"
+LIBC_FLAG="-lxuperlibc"
 
 log() { printf '[ffmpeg] %s\n' "$*"; }
 fail() { printf '[ffmpeg] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -81,9 +86,13 @@ int main(void)
 EOF
 
 LINK_VARIANTS=(
-  ""
-  "-lSystem"
-  "-lobjc -framework Foundation -framework CoreFoundation"
+  "$LIBC_FLAG"
+  "-lSystem $LIBC_FLAG"
+  "-lobjc -framework Foundation -framework CoreFoundation $LIBC_FLAG"
+)
+
+FRAMEWORK_VARIANTS=(
+  "-lobjc -framework Foundation -framework UIKit -framework CoreGraphics -framework AVFoundation -framework AVKit $LIBC_FLAG"
 )
 
 SDK_USED=""
@@ -106,10 +115,34 @@ complete_startup_objects() {
   fi
 }
 
+generar_libc_tbd() {
+  local sdk="$1" salida="$2"
+  "$PYTHON" "$GENERADOR" --sdk "$sdk" --extra-sdk "$3" --output "$salida"
+}
+
 complete_startup_objects "$SDK10"
 complete_startup_objects "$SDK9"
 
-for SDK_CANDIDATE in "$SDK10" "$SDK9"; do
+cat > "$WORK/frameworks.m" <<'EOF'
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <AVFoundation/AVFoundation.h>
+#import <AVKit/AVKit.h>
+
+int main(void)
+{
+    @autoreleasepool {
+        NSLog(@"%@ %@ %@ %@", NSStringFromClass([NSObject class]),
+              NSStringFromClass([UIView class]),
+              NSStringFromClass([AVPlayer class]),
+              NSStringFromClass([AVPlayerViewController class]));
+    }
+    return 0;
+}
+EOF
+
+for SDK_CANDIDATE in "$SDK9" "$SDK10"; do
   if [ ! -f "$SDK_CANDIDATE/usr/lib/libSystem.tbd" ]; then
     log "El SDK $(basename "$SDK_CANDIDATE") no tiene usr/lib/libSystem.tbd"
     continue
@@ -118,6 +151,15 @@ for SDK_CANDIDATE in "$SDK10" "$SDK9"; do
     log "El SDK $(basename "$SDK_CANDIDATE") no tiene usr/lib/crt1.o"
     continue
   fi
+
+  EXTRA_SDK="$SDK10"
+  [ "$SDK_CANDIDATE" = "$SDK10" ] && EXTRA_SDK="$SDK9"
+  if ! generar_libc_tbd "$SDK_CANDIDATE" "$SDK_CANDIDATE/usr/lib/$LIBC_TBD" "$EXTRA_SDK"; then
+    log "No se pudo preparar la libc de $(basename "$SDK_CANDIDATE")"
+    continue
+  fi
+
+  LIBC_OK=0
   for DRIVER_CANDIDATE in "$CC" "$CXX"; do
     [ -n "$DRIVER_CANDIDATE" ] || continue
     for LD_EXTRA in "${LINK_VARIANTS[@]}"; do
@@ -125,17 +167,45 @@ for SDK_CANDIDATE in "$SDK10" "$SDK9"; do
       if "$DRIVER_CANDIDATE" -target "$TARGET" -arch armv7 -isysroot "$SDK_CANDIDATE" \
         -miphoneos-version-min="$MIN_IOS" $LD_EXTRA -Wl,-dynamic,-search_paths_first \
         "$WORK/probe.c" -o "$WORK/probe" > "$WORK/probe.log" 2>&1; then
-        SDK_USED="$SDK_CANDIDATE"
-        LD_EXTRA_USED="$LD_EXTRA"
+        LIBC_OK=1
         DRIVER_USED="$DRIVER_CANDIDATE"
-        break 3
+        break 2
       fi
-      tail -n 6 "$WORK/probe.log" >&2 || true
+      log "El enlace con [$(basename "$SDK_CANDIDATE")][$LD_EXTRA] fallo"
+      cat "$WORK/probe.log" >&2 || true
     done
   done
+
+  if [ "$LIBC_OK" != 1 ]; then
+    log "El SDK $(basename "$SDK_CANDIDATE") no resuelve la libc de armv7"
+    continue
+  fi
+
+  FRAMEWORKS_OK=0
+  for LD_EXTRA in "${FRAMEWORK_VARIANTS[@]}"; do
+    log "Probando los frameworks de $(basename "$SDK_CANDIDATE") con [$LD_EXTRA]"
+    if "$DRIVER_USED" -target "$TARGET" -arch armv7 -isysroot "$SDK_CANDIDATE" \
+      -miphoneos-version-min="$MIN_IOS" -fobjc-arc -x objective-c \
+      $LD_EXTRA -Wl,-dynamic,-search_paths_first \
+      "$WORK/frameworks.m" -o "$WORK/frameworks" > "$WORK/frameworks.log" 2>&1; then
+      FRAMEWORKS_OK=1
+      LD_EXTRA_USED="$LD_EXTRA"
+      break
+    fi
+    log "Los frameworks de $(basename "$SDK_CANDIDATE") no se enlazan"
+    cat "$WORK/frameworks.log" >&2 || true
+  done
+
+  if [ "$FRAMEWORKS_OK" != 1 ]; then
+    log "El SDK $(basename "$SDK_CANDIDATE") no enlaza los frameworks de iOS"
+    continue
+  fi
+
+  SDK_USED="$SDK_CANDIDATE"
+  break
 done
 
-[ -n "$SDK_USED" ] || fail "Ninguna variante de enlace resuelve la libc de armv7"
+[ -n "$SDK_USED" ] || fail "Ningun SDK resuelve la libc y los frameworks de armv7"
 
 log "Enlace valido con $DRIVER_USED, $(basename "$SDK_USED") y [$LD_EXTRA_USED]"
 
@@ -163,7 +233,7 @@ EOF
 fi
 
 CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 -fPIC"
-LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS"
+LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS $LIBC_FLAG"
 CFLAGS_FFMPEG="$CFLAGS_TARGET -I$OUT/include"
 LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib"
 
@@ -261,7 +331,7 @@ if [ -n "$STRIP" ]; then
   FF_ARGS+=(--strip="$STRIP")
 fi
 
-LD_FLAGS="$LDFLAGS_FFMPEG $LD_EXTRA_USED"
+LD_FLAGS="$LDFLAGS_FFMPEG $LIBC_FLAG"
 log "Configurando FFmpeg con $LD_FLAGS"
 if ! PKG_CONFIG_PATH="$WORK/pkgconfig" PKG_CONFIG_LIBDIR="$WORK/pkgconfig" \
   ./configure "${FF_ARGS[@]}" --extra-ldflags="$LD_FLAGS"; then

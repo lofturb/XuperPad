@@ -131,6 +131,22 @@ jobs:
           done
           echo "SDKs 9.3 y 10.3 instalados con AVFoundation, AVKit y UIKit"
 
+      - name: Preparar la libc de armv7
+        run: |
+          set -euo pipefail
+          SDK9="$THEOS/sdks/iPhoneOS9.3.sdk"
+          SDK10="$THEOS/sdks/iPhoneOS10.3.sdk"
+          python3 tools/generator_libsystem_tbd.py --sdk "$SDK9" --extra-sdk "$SDK10" \
+            --output "$SDK9/usr/lib/libxuperlibc.tbd"
+          python3 tools/generator_libsystem_tbd.py --sdk "$SDK10" --extra-sdk "$SDK9" \
+            --output "$SDK10/usr/lib/libxuperlibc.tbd"
+          for SDK in "$SDK9" "$SDK10"; do
+            test -f "$SDK/usr/lib/libxuperlibc.tbd"
+            grep -q "_strcmp" "$SDK/usr/lib/libxuperlibc.tbd"
+            grep -q "_strncmp" "$SDK/usr/lib/libxuperlibc.tbd"
+          done
+          echo "La libc de armv7 queda disponible como libxuperlibc.tbd"
+
       - name: Instalar ldid
         run: |
           set -euo pipefail
@@ -153,7 +169,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/vendor/ffmpeg
-          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10-v3
+          key: ffmpeg-ios-armv7-n4.4.4-mbedtls-2.28.10-v4
 
       - name: Compilar FFmpeg para armv7
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'

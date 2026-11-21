@@ -1,4 +1,4 @@
-XUPER_FFMPEG_SDK_VERSION ?= 10.3
+XUPER_FFMPEG_SDK_VERSION ?= 9.3
 ifneq ($(wildcard vendor/ffmpeg/ldconfig.mk),)
 include vendor/ffmpeg/ldconfig.mk
 endif
@@ -38,6 +38,11 @@ XuperPad_FILES = main.m \
 XuperPad_FRAMEWORKS = UIKit Foundation CoreGraphics AVFoundation AVKit
 
 XuperPad_LIBRARIES = c++abi
+
+XUPER_SDK_SYSROOT := $(THEOS_SDKS_PATH)/iPhoneOS$(XUPER_FFMPEG_SDK_VERSION).sdk
+ifneq ($(wildcard $(XUPER_SDK_SYSROOT)/usr/lib/libxuperlibc.tbd),)
+XuperPad_LIBRARIES += xuperlibc
+endif
 
 XuperPad_CFLAGS = -fobjc-arc -fblocks \
 	-fno-optimize-sibling-calls \
