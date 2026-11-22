@@ -244,7 +244,7 @@ esac
 log "Banderas PIE para armv7: $PIC_FLAGS"
 printf 'XUPER_PIC_FLAGS := %s\n' "$PIC_FLAGS" > "$OUT/picflags.mk"
 
-CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O2 $PIC_FLAGS -fno-optimize-sibling-calls"
+CFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS -O3 $PIC_FLAGS -fno-optimize-sibling-calls"
 LDFLAGS_TARGET="-target $TARGET -arch armv7 -isysroot $SDK_USED -miphoneos-version-min=$MIN_IOS"
 CFLAGS_FFMPEG="$CFLAGS_TARGET -mfpu=neon -I$OUT/include"
 LDFLAGS_FFMPEG="$LDFLAGS_TARGET -L$OUT/lib $LIBC_FLAG"
