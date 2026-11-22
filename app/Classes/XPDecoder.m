@@ -1056,7 +1056,7 @@ lastCopySeconds = 0;
     double offset = [self videoMasterOffsetValue];
     XPVideoFrameData *head = frames.firstObject;
     XPVideoFrameData *newest = frames.lastObject;
-    if (newest.pts + offset < clock - 0.50) {
+    if (newest.pts + offset < clock - 0.35) {
       [frames removeAllObjects];
       [frameCondition unlock];
       return newest;
@@ -1612,9 +1612,10 @@ lastCopySeconds = 0;
     return NO;
   }
   videoContext->pkt_timebase = format->streams[state->videoIndex]->time_base;
-  videoContext->thread_count = 2;
+  videoContext->thread_count = 3;
   if (videoCodec->id == AV_CODEC_ID_HEVC) {
     videoContext->thread_type = FF_THREAD_FRAME;
+    videoContext->skip_loop_filter = AVDISCARD_NONINTRA;
   } else {
     videoContext->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
   }
@@ -1627,13 +1628,14 @@ lastCopySeconds = 0;
   NSString *videoCodecName = videoCodec->name != NULL
                                ? [NSString stringWithUTF8String:videoCodec->name]
                                : @"desconocido";
-  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %lld hilos %d base %d/%d",
+  NSLog(@"[XuperPad] decodificador: video %@ %dx%d pix %d bitrate %lld hilos %d filtro %d base %d/%d",
         videoCodecName,
         videoContext->width,
         videoContext->height,
         (int)videoContext->pix_fmt,
         (long long)videoContext->bit_rate,
         videoContext->thread_count,
+        (int)videoContext->skip_loop_filter,
         videoContext->pkt_timebase.num,
         videoContext->pkt_timebase.den);
 
