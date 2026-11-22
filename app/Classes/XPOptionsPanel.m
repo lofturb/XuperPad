@@ -313,7 +313,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   closeButton.frame = CGRectMake(width - margin - 76.0f, 6.0f, 76.0f, 26.0f);
 
   CGFloat scrollTop = 38.0f;
-  self.scrollView.frame = CGRectMake(0.0f, scrollTop, width, MAX(10.0f, height - scrollTop));
+  scrollView.frame = CGRectMake(0.0f, scrollTop, width, MAX(10.0f, height - scrollTop));
 
   CGFloat y = 4.0f;
   CGFloat contentWidth = MAX(20.0f, width - margin * 2.0f);
@@ -328,7 +328,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
     }
     y += row.height + 6.0f;
   }
-  self.scrollView.contentSize = CGSizeMake(width, y + 4.0f);
+  scrollView.contentSize = CGSizeMake(width, y + 4.0f);
 }
 
 - (void)drawRect:(CGRect)rect
