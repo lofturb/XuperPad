@@ -65,6 +65,7 @@ static NSString *const XPGLFragmentShader =
   GLint drawableWidth;
   GLint drawableHeight;
   XPVideoFrameData *frameData;
+  XPVideoFrameData *uploadedFrame;
   int framePixelWidth;
   int framePixelHeight;
   CADisplayLink *displayLink;
@@ -180,6 +181,7 @@ static NSString *const XPGLFragmentShader =
 - (void)clearFrame
 {
   frameData = nil;
+  uploadedFrame = nil;
   framePixelWidth = 0;
   framePixelHeight = 0;
   needsUpload = NO;
@@ -210,6 +212,7 @@ static NSString *const XPGLFragmentShader =
         [self uploadRGB:data.rgb width:framePixelWidth height:framePixelHeight];
       }
       needsUpload = NO;
+      uploadedFrame = data;
     }
     [self drawQuadUsingYuv:useYuv];
   }

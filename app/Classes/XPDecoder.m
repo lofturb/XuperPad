@@ -107,6 +107,10 @@ typedef struct {
   double lastCopySeconds;
   double latestPTS;
   double demuxPTS;
+  double audioDemuxPTS;
+  double videoDemuxPTS;
+  BOOL videoNeedsFlush;
+  BOOL videoNeedsKeyframe;
   double lastAudioClock;
   CFAbsoluteTime lastAudioClockAt;
   volatile BOOL audioClockHealthy;
@@ -170,6 +174,10 @@ typedef struct {
 - (void)waitForVideoPace:(double)pts;
 - (void)performPendingSeek;
 - (void)applyPendingSelections;
+- (void)throttleByTimestamp;
+- (void)realignAudioClock;
+- (XPQueuedPacket *)takeKeyframePacket;
+- (NSUInteger)videoPacketsToDrop;
 - (double)masterClock;
 - (void)updateClockHealth;
 - (void)reportVideoSize:(int)width height:(int)height;
@@ -195,9 +203,11 @@ static NSString *XPFFmpegErrorText(int code)
 }
 
 static const NSUInteger XPVideoQueueLimit = 6;
-static const NSUInteger XPVideoPacketLimit = 32;
+static const NSUInteger XPVideoPacketLimit = 64;
 static const double XPDemuxLeadSeconds = 0.50;
 static const double XPVideoLeadSeconds = 0.30;
+static const double XPAudioQueueTargetSeconds = 0.75;
+static const double XPVideoLateSeconds = 0.40;
 
 static double XPResidentMegabytes(void)
 {
@@ -657,9 +667,11 @@ static NSString *XPASSLineText(const char *ass)
         }
         if (streamIndex == state->videoIndex) {
           videoPacketCount++;
+          videoDemuxPTS = packetTime;
           [self enqueueVideoPacket];
         } else if (streamIndex == state->audioIndex) {
           audioPacketCount++;
+          audioDemuxPTS = packetTime;
           CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
           [self decodeAudioPacket];
           audioDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
@@ -804,6 +816,34 @@ static NSString *XPASSLineText(const char *ass)
           avcodec_flush_buffers(state->video);
         }
       }
+      BOOL isKey = packet != NULL && (packet->flags & AV_PKT_FLAG_KEY) != 0;
+      [videoCondition lock];
+      BOOL waitingForKey = videoNeedsKeyframe;
+      videoNeedsKeyframe = NO;
+      BOOL needsFlush = videoNeedsFlush;
+      videoNeedsFlush = NO;
+      [videoCondition unlock];
+      if (waitingForKey && !isKey) {
+        av_packet_free(&packet);
+        continue;
+      }
+      if (needsFlush && isKey && state != NULL && state->video != NULL) {
+        avcodec_flush_buffers(state->video);
+      }
+      int videoIndex = state != NULL ? state->videoIndex : -1;
+      double packetPTS = [self packetTime:packet streamIndex:videoIndex];
+      double clock = [self masterClock];
+      if (!isKey && clock > 0 && packetPTS > 0 && packetPTS < clock - XPVideoLateSeconds) {
+        XPQueuedPacket *key = [self takeKeyframePacket];
+        if (key != nil) {
+          av_packet_free(&packet);
+          packet = key.packet;
+          isKey = YES;
+          if (state != NULL && state->video != NULL) {
+            avcodec_flush_buffers(state->video);
+          }
+        }
+      }
       [self decodeVideoPacket:packet generation:generation];
       av_packet_free(&packet);
     }
@@ -830,6 +870,82 @@ static NSString *XPASSLineText(const char *ass)
   [videoCondition lock];
   [videoPackets addObject:item];
   while (videoPackets.count > XPVideoPacketLimit) {
+    NSUInteger removeCount = [self videoPacketsToDrop];
+    if (removeCount == 0) {
+      break;
+    }
+    for (NSUInteger index = 0; index < removeCount; index++) {
+      XPQueuedPacket *dropped = [videoPackets firstObject];
+      [videoPackets removeObjectAtIndex:0];
+      AVPacket *droppedPacket = dropped.packet;
+      if (droppedPacket != NULL) {
+        av_packet_free(&droppedPacket);
+      }
+    }
+    videoNeedsFlush = YES;
+  }
+  [videoCondition broadcast];
+  [videoCondition unlock];
+}
+
+- (NSUInteger)videoPacketsToDrop
+{
+  NSUInteger firstKey = NSNotFound;
+  for (NSUInteger index = 0; index < videoPackets.count; index++) {
+    XPQueuedPacket *candidate = [videoPackets objectAtIndex:index];
+    AVPacket *candidatePacket = candidate.packet;
+    if (candidatePacket != NULL && (candidatePacket->flags & AV_PKT_FLAG_KEY) != 0) {
+      firstKey = index;
+      break;
+    }
+  }
+  if (firstKey == NSNotFound) {
+    videoNeedsKeyframe = YES;
+    return videoPackets.count;
+  }
+  if (firstKey > 0) {
+    return firstKey;
+  }
+  NSUInteger nextKey = NSNotFound;
+  for (NSUInteger index = 1; index < videoPackets.count; index++) {
+    XPQueuedPacket *candidate = [videoPackets objectAtIndex:index];
+    AVPacket *candidatePacket = candidate.packet;
+    if (candidatePacket != NULL && (candidatePacket->flags & AV_PKT_FLAG_KEY) != 0) {
+      nextKey = index;
+      break;
+    }
+  }
+  if (nextKey == NSNotFound) {
+    videoNeedsKeyframe = YES;
+    return videoPackets.count;
+  }
+  return nextKey;
+}
+
+- (XPQueuedPacket *)takeKeyframePacket
+{
+  [videoCondition lock];
+  NSUInteger keyIndex = NSNotFound;
+  for (NSUInteger index = 0; index < videoPackets.count; index++) {
+    XPQueuedPacket *candidate = [videoPackets objectAtIndex:index];
+    AVPacket *candidatePacket = candidate.packet;
+    if (candidatePacket != NULL && (candidatePacket->flags & AV_PKT_FLAG_KEY) != 0) {
+      keyIndex = index;
+      break;
+    }
+  }
+  if (keyIndex == NSNotFound) {
+    for (XPQueuedPacket *item in videoPackets) {
+      AVPacket *queuedPacket = item.packet;
+      if (queuedPacket != NULL) {
+        av_packet_free(&queuedPacket);
+      }
+    }
+    [videoPackets removeAllObjects];
+    [videoCondition unlock];
+    return nil;
+  }
+  for (NSUInteger index = 0; index < keyIndex; index++) {
     XPQueuedPacket *dropped = [videoPackets firstObject];
     [videoPackets removeObjectAtIndex:0];
     AVPacket *droppedPacket = dropped.packet;
@@ -837,8 +953,10 @@ static NSString *XPASSLineText(const char *ass)
       av_packet_free(&droppedPacket);
     }
   }
-  [videoCondition broadcast];
+  XPQueuedPacket *key = [videoPackets firstObject];
+  [videoPackets removeObjectAtIndex:0];
   [videoCondition unlock];
+  return key;
 }
 
 - (XPQueuedPacket *)takeVideoPacket
@@ -1271,9 +1389,13 @@ static NSString *XPASSLineText(const char *ass)
   double played = [audioOutput playedSeconds];
   CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
   if (played > lastAudioClock + 0.001) {
+    BOOL wasHealthy = audioClockHealthy;
     lastAudioClock = played;
     lastAudioClockAt = now;
     audioClockHealthy = YES;
+    if (!wasHealthy) {
+      [self realignAudioClock];
+    }
     return;
   }
   if (lastAudioClockAt > 0 && now - lastAudioClockAt > 1.5) {
@@ -1281,7 +1403,41 @@ static NSString *XPASSLineText(const char *ass)
   }
 }
 
+- (void)realignAudioClock
+{
+  [clockLock lock];
+  if (hasVideoStart) {
+    double videoClock = videoStartPTS + (CFAbsoluteTimeGetCurrent() - videoWall);
+    double audioClock = audioStartPTS + audioOffset + lastAudioClock * (double)currentRate;
+    double delta = videoClock - audioClock;
+    if (delta > 0.05 || delta < -0.05) {
+      audioOffset += delta;
+      NSLog(@"[XuperPad] decodificador: audio realineado %.2fs", delta);
+    }
+  }
+  [clockLock unlock];
+}
+
 - (void)throttleIfNeeded
+{
+  if (state == NULL || audioOutput == nil || state->audio == NULL || state->audioIndex < 0) {
+    [self throttleByTimestamp];
+    return;
+  }
+  for (int guard = 0; guard < 400; guard++) {
+    if (!running) {
+      return;
+    }
+    [self updateClockHealth];
+    double queued = [audioOutput queuedSeconds];
+    if (queued < XPAudioQueueTargetSeconds) {
+      return;
+    }
+    [NSThread sleepForTimeInterval:0.005];
+  }
+}
+
+- (void)throttleByTimestamp
 {
   for (int guard = 0; guard < 200; guard++) {
     if (!running) {
