@@ -20,8 +20,14 @@ typedef void (^XPSessionCompletion)(NSDictionary *sessionInfo, NSError *error);
 /// Token de sesion asignado por el portal.
 @property (nonatomic, copy) NSString *userToken;
 
+/// Token de dispositivo entregado por el portal al activar la sesion.
+@property (nonatomic, copy) NSString *snToken;
+
 /// Momento en segundos epoch cuando caduca la credencial.
 @property (nonatomic, assign) NSTimeInterval expiresAt;
+
+/// Segundos que el portal pide entre latidos de renovacion.
+@property (nonatomic, assign) NSTimeInterval heartbeatInterval;
 
 /// Indica si la sesion se obtuvo de una credencial anonima publicada.
 @property (nonatomic, assign) BOOL fromSharedSeed;

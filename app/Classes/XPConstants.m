@@ -19,6 +19,9 @@ NSString *const XPFixedDrmId = @"0iSGEyv2EqiS/nqI/I3hqdu12irw5Q3/uqrWvRFx9bM=";
 NSString *const XPFixedMacAddress = @"02:00:00:00:00:00";
 
 NSString *const XPGeoBlockedErrorCode = @"portal100024";
+NSString *const XPVersionRejectedErrorCode = @"portal200001";
+NSString *const XPCredentialBusyErrorCode = @"aaa100083";
+NSString *const XPSessionNotLoggedInErrorCode = @"aaa100028";
 
 NSString *const XPColumnFeatured = @"masnew_featured";
 NSString *const XPColumnMovies = @"masnew_movies";
@@ -51,6 +54,15 @@ NSString *XPPortalErrorMessage(NSString *returnCode, id rawMessage)
 {
   if ([returnCode isEqualToString:XPGeoBlockedErrorCode]) {
     return @"el portal bloquea esta region";
+  }
+  if ([returnCode isEqualToString:XPVersionRejectedErrorCode]) {
+    return @"el portal retiro la version del cliente";
+  }
+  if ([returnCode isEqualToString:XPCredentialBusyErrorCode]) {
+    return @"esa credencial ya esta activa en otro dispositivo";
+  }
+  if ([returnCode isEqualToString:XPSessionNotLoggedInErrorCode]) {
+    return @"la sesion no esta iniciada";
   }
   if ([XPSessionDeadErrorCodes() containsObject:returnCode]) {
     return @"la sesion del portal caduco";
@@ -109,8 +121,7 @@ NSArray *XPSessionDeadErrorCodes(void)
       @"aaa100028",
       @"aaa100080",
       @"aaa100082",
-      @"aaa100083",
-      @"portal200001"
+      @"aaa100083"
     ];
   });
   return codes;

@@ -9,8 +9,13 @@
 #import "XPSeedPool.h"
 
 static NSString *const XPSessionErrorDomain = @"XPSession";
+static NSString *const XPSessionStoreKey = @"XuperPad.activeSession";
 static NSTimeInterval const XPSessionSafetyMargin = 300;
-static NSTimeInterval const XPSessionMaxAge = 21600;
+static NSTimeInterval const XPSessionDefaultMaxAge = 21600;
+static NSTimeInterval const XPSessionMaxServerAge = 86400;
+static NSTimeInterval const XPSessionDefaultHeartbeat = 60;
+static NSTimeInterval const XPSessionMinHeartbeat = 30;
+static NSTimeInterval const XPSessionMaxHeartbeat = 120;
 static NSUInteger const XPSessionMaxActivationAttempts = 2;
 static NSUInteger const XPSessionMaxSeedAttempts = 3;
 
@@ -21,6 +26,9 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
 @property (nonatomic, strong) XPSessionState *state;
 @property (nonatomic, assign) BOOL working;
 @property (nonatomic, strong) NSMutableArray *waiting;
+@property (nonatomic, strong) NSTimer *heartbeatTimer;
+@property (nonatomic, assign) BOOL heartbeatInFlight;
+@property (nonatomic, assign) BOOL restoredFromStore;
 @end
 
 @implementation XPSession
@@ -40,6 +48,7 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
   self = [super init];
   if (self) {
     _waiting = [NSMutableArray array];
+    [self restoreStoredSession];
   }
   return self;
 }
@@ -51,7 +60,7 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
 
 - (void)invalidate
 {
-  self.state = nil;
+  [self discardCurrentState];
 }
 
 - (void)invalidateSharedSeed
@@ -63,7 +72,190 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
       NSLog(@"[XuperPad] sesion: credencial compartida descartada");
     }
   }
+  [self discardCurrentState];
+}
+
+- (void)restoreStoredSession
+{
+  NSDictionary *stored = [[NSUserDefaults standardUserDefaults]
+                            dictionaryForKey:XPSessionStoreKey];
+  if (![stored isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+  NSString *seed = stored[@"seed"];
+  NSString *userIdentifier = stored[@"userId"];
+  NSString *userToken = stored[@"userToken"];
+  NSString *snToken = stored[@"snToken"];
+  if (![seed isKindOfClass:[NSString class]] || seed.length == 0 ||
+      ![userIdentifier isKindOfClass:[NSString class]] || userIdentifier.length == 0 ||
+      ![userToken isKindOfClass:[NSString class]] || userToken.length == 0 ||
+      ![snToken isKindOfClass:[NSString class]] || snToken.length == 0) {
+    [self clearStoredSession];
+    return;
+  }
+  NSTimeInterval expiresAt = [stored[@"expiresAt"] doubleValue];
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  if (expiresAt - XPSessionSafetyMargin <= now) {
+    NSLog(@"[XuperPad] sesion: la sesion guardada ya habia caducado");
+    [self clearStoredSession];
+    return;
+  }
+  XPSessionState *state = [[XPSessionState alloc] init];
+  state.seed = seed;
+  state.userIdentifier = userIdentifier;
+  state.userToken = userToken;
+  state.snToken = snToken;
+  state.expiresAt = expiresAt;
+  state.heartbeatInterval = [stored[@"heartbeatInterval"] doubleValue];
+  state.fromSharedSeed = [stored[@"fromSharedSeed"] boolValue];
+  self.state = state;
+  self.restoredFromStore = YES;
+  NSLog(@"[XuperPad] sesion: se restaura la sesion guardada");
+}
+
+- (void)persistCurrentState
+{
+  XPSessionState *state = self.state;
+  if (state == nil) {
+    [self clearStoredSession];
+    return;
+  }
+  NSDictionary *payload = @{ @"seed" : state.seed ?: @"",
+                             @"userId" : state.userIdentifier ?: @"",
+                             @"userToken" : state.userToken ?: @"",
+                             @"snToken" : state.snToken ?: @"",
+                             @"expiresAt" : @(state.expiresAt),
+                             @"heartbeatInterval" : @(state.heartbeatInterval),
+                             @"fromSharedSeed" : @(state.fromSharedSeed) };
+  [[NSUserDefaults standardUserDefaults] setObject:payload forKey:XPSessionStoreKey];
+}
+
+- (void)clearStoredSession
+{
+  [[NSUserDefaults standardUserDefaults] removeObjectForKey:XPSessionStoreKey];
+}
+
+- (void)discardCurrentState
+{
+  [self stopHeartbeat];
   self.state = nil;
+  self.restoredFromStore = NO;
+  self.heartbeatInFlight = NO;
+  [self clearStoredSession];
+}
+
+- (void)startHeartbeat
+{
+  [self stopHeartbeat];
+  if (self.state == nil) {
+    return;
+  }
+  NSTimeInterval interval = self.state.heartbeatInterval > 0
+                          ? self.state.heartbeatInterval
+                          : XPSessionDefaultHeartbeat;
+  self.heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:interval
+                                                         target:self
+                                                       selector:@selector(heartbeatFired:)
+                                                       userInfo:nil
+                                                        repeats:YES];
+  NSLog(@"[XuperPad] sesion: latido cada %.0f s", interval);
+}
+
+- (void)stopHeartbeat
+{
+  [self.heartbeatTimer invalidate];
+  self.heartbeatTimer = nil;
+}
+
+- (void)heartbeatFired:(NSTimer *)timer
+{
+  if (self.working || self.heartbeatInFlight) {
+    return;
+  }
+  XPSessionState *state = self.state;
+  if (state == nil || state.userToken.length == 0) {
+    return;
+  }
+  if (!state.fromSharedSeed && state.snToken.length == 0) {
+    return;
+  }
+  self.heartbeatInFlight = YES;
+  NSString *seed = state.seed;
+  NSString *snToken = state.snToken;
+  NSDictionary *parameters = [self activationParametersWithSeed:seed snToken:snToken];
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    [self callPortalPath:@"v8/active"
+              parameters:parameters
+               completion:^(NSDictionary *activation, NSError *error) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        self.heartbeatInFlight = NO;
+        [self handleHeartbeatResult:activation error:error seed:seed snToken:snToken];
+      });
+    }];
+  });
+}
+
+- (void)handleHeartbeatResult:(NSDictionary *)activation
+                        error:(NSError *)error
+                         seed:(NSString *)seed
+                      snToken:(NSString *)snToken
+{
+  if (activation != nil) {
+    XPSessionState *state = self.state;
+    if (state == nil) {
+      return;
+    }
+    NSString *userIdentifier = activation[@"userId"];
+    NSString *userToken = activation[@"userToken"];
+    if ([userIdentifier isKindOfClass:[NSString class]] && userIdentifier.length > 0) {
+      state.userIdentifier = userIdentifier;
+    }
+    if ([userToken isKindOfClass:[NSString class]] && userToken.length > 0) {
+      state.userToken = userToken;
+    }
+    state.snToken = snToken;
+    [self applyServerTimingToState:state activation:activation];
+    [self persistCurrentState];
+    NSTimeInterval remaining = state.expiresAt - [[NSDate date] timeIntervalSince1970];
+    NSLog(@"[XuperPad] sesion: latido correcto, vigente %.0f min", remaining / 60.0);
+    return;
+  }
+  NSString *code = error.userInfo[@"portalCode"];
+  if ([XPSessionDeadErrorCodes() containsObject:code]) {
+    NSLog(@"[XuperPad] sesion: el portal rechazo el latido (%@), se renueva", code);
+    [self discardCurrentState];
+    [self ensureSessionWithCompletion:nil];
+    return;
+  }
+  NSLog(@"[XuperPad] sesion: el latido no respondio (%@), se reintenta",
+        [error localizedDescription] ?: @"sin detalle");
+}
+
+- (void)applyServerTimingToState:(XPSessionState *)state
+                       activation:(NSDictionary *)activation
+{
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  double available = [[activation[@"availableTime"] description] doubleValue];
+  if (available <= 0) {
+    available = XPSessionDefaultMaxAge;
+  }
+  if (available > XPSessionMaxServerAge) {
+    available = XPSessionMaxServerAge;
+  }
+  state.expiresAt = now + available;
+  double heartbeat = [[activation[@"heartBeatTime"] description] doubleValue];
+  if (heartbeat > 0) {
+    NSTimeInterval interval = heartbeat / 2.0;
+    if (interval < XPSessionMinHeartbeat) {
+      interval = XPSessionMinHeartbeat;
+    }
+    if (interval > XPSessionMaxHeartbeat) {
+      interval = XPSessionMaxHeartbeat;
+    }
+    state.heartbeatInterval = interval;
+  } else if (state.heartbeatInterval <= 0) {
+    state.heartbeatInterval = XPSessionDefaultHeartbeat;
+  }
 }
 
 - (NSDictionary *)deviceParametersWithSeed:(NSString *)seed
@@ -81,6 +273,29 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
   if (self.state != nil &&
       self.state.userToken.length > 0 &&
       self.state.expiresAt - XPSessionSafetyMargin > now) {
+    if (self.restoredFromStore) {
+      self.restoredFromStore = NO;
+      if (!self.working) {
+        self.working = YES;
+        [self resumeStoredSessionWithCompletion:^(NSDictionary *resumed, NSError *resumeError) {
+          if (resumed != nil) {
+            [self notifyWaitingWithState:resumed error:nil];
+            return;
+          }
+          NSString *code = resumeError.userInfo[@"portalCode"];
+          if ([XPSessionDeadErrorCodes() containsObject:code]) {
+            [self discardCurrentState];
+          } else {
+            [self startHeartbeat];
+            [self notifyWaitingWithState:[self dictionaryFromState:self.state] error:nil];
+            return;
+          }
+          [self createSessionWithCompletion];
+        }];
+      }
+      return;
+    }
+    [self startHeartbeat];
     [self notifyWaitingWithState:[self dictionaryFromState:self.state] error:nil];
     return;
   }
@@ -89,7 +304,11 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
     return;
   }
   self.working = YES;
+  [self createSessionWithCompletion];
+}
 
+- (void)createSessionWithCompletion
+{
   /* El port de referencia activa el dispositivo contra el portal y solo
      recurre a una credencial publicada cuando la activacion real falla por
      red o por bloqueo regional. Las credenciales publicadas estan atadas a
@@ -109,6 +328,47 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
       }
       [self notifyWaitingWithState:nil error:(freshError ?: seedError)];
     }];
+  }];
+}
+
+- (void)resumeStoredSessionWithCompletion:(void (^)(NSDictionary *, NSError *))completion
+{
+  XPSessionState *state = self.state;
+  if (state == nil) {
+    if (completion != nil) {
+      completion(nil, [self errorWithMessage:@"no hay sesion guardada"]);
+    }
+    return;
+  }
+  NSString *seed = state.seed;
+  NSString *snToken = state.snToken;
+  NSDictionary *parameters = [self activationParametersWithSeed:seed snToken:snToken];
+  [self callPortalPath:@"v8/active"
+            parameters:parameters
+             completion:^(NSDictionary *activation, NSError *error) {
+    NSString *userIdentifier = activation[@"userId"];
+    NSString *userToken = activation[@"userToken"];
+    if (![userIdentifier isKindOfClass:[NSString class]] || userIdentifier.length == 0 ||
+        ![userToken isKindOfClass:[NSString class]] || userToken.length == 0) {
+      if (completion != nil) {
+        completion(nil, error ?: [self errorWithMessage:@"la sesion guardada no devolvio credenciales"]);
+      }
+      return;
+    }
+    XPSessionState *renewed = [[XPSessionState alloc] init];
+    renewed.seed = seed;
+    renewed.userIdentifier = userIdentifier;
+    renewed.userToken = userToken;
+    renewed.snToken = snToken;
+    renewed.fromSharedSeed = state.fromSharedSeed;
+    [self applyServerTimingToState:renewed activation:activation];
+    self.state = renewed;
+    [self persistCurrentState];
+    [self startHeartbeat];
+    NSLog(@"[XuperPad] sesion: sesion guardada renovada");
+    if (completion != nil) {
+      completion([self dictionaryFromState:renewed], nil);
+    }
   }];
 }
 
@@ -197,6 +457,26 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
   return fingerprint;
 }
 
+- (NSMutableDictionary *)activationParametersWithSeed:(NSString *)seed
+                                              snToken:(NSString *)snToken
+{
+  NSMutableDictionary *parameters =
+      [[self deviceParametersWithSeed:seed] mutableCopy];
+  if ([snToken isKindOfClass:[NSString class]] && snToken.length > 0) {
+    [parameters setObject:snToken forKey:@"snToken"];
+  }
+  [parameters setObject:@"" forKey:@"authVersion"];
+  [parameters setObject:@"" forKey:@"authCode"];
+  [parameters setObject:@"" forKey:@"preCode"];
+  [parameters setObject:XPFixedMacAddress forKey:@"macAddr"];
+  [parameters setObject:@"" forKey:@"reserve1"];
+  [parameters setObject:@"4" forKey:@"openNum"];
+  [parameters setObject:@"default" forKey:@"channel"];
+  [parameters setObject:@"" forKey:@"matadata"];
+  [parameters setObject:@"" forKey:@"signdata"];
+  return parameters;
+}
+
 - (void)createFreshSessionWithCompletion:(void (^)(NSDictionary *, NSError *))completion
 {
   NSMutableDictionary *parameters = [[self deviceParametersWithSeed:@""] mutableCopy];
@@ -219,18 +499,8 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
                         [snToken stringByAppendingString:XPDeviceSalt]];
     }
 
-    NSMutableDictionary *activateParameters =
-        [[self deviceParametersWithSeed:resolvedSeed] mutableCopy];
-    [activateParameters setObject:snToken forKey:@"snToken"];
-    [activateParameters setObject:@"" forKey:@"authVersion"];
-    [activateParameters setObject:@"" forKey:@"authCode"];
-    [activateParameters setObject:@"" forKey:@"preCode"];
-    [activateParameters setObject:XPFixedMacAddress forKey:@"macAddr"];
-    [activateParameters setObject:@"" forKey:@"reserve1"];
-    [activateParameters setObject:@"4" forKey:@"openNum"];
-    [activateParameters setObject:@"default" forKey:@"channel"];
-    [activateParameters setObject:@"" forKey:@"matadata"];
-    [activateParameters setObject:@"" forKey:@"signdata"];
+    NSDictionary *activateParameters =
+        [self activationParametersWithSeed:resolvedSeed snToken:snToken];
 
     [self callPortalPath:@"v8/active"
               parameters:activateParameters
@@ -249,9 +519,12 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
       state.seed = resolvedSeed;
       state.userIdentifier = userIdentifier;
       state.userToken = userToken;
-      state.expiresAt = [[NSDate date] timeIntervalSince1970] + XPSessionMaxAge;
+      state.snToken = snToken;
       state.fromSharedSeed = NO;
+      [self applyServerTimingToState:state activation:activation];
       self.state = state;
+      [self persistCurrentState];
+      [self startHeartbeat];
       NSLog(@"[XuperPad] sesion: creada desde cero");
       if (completion != nil) {
         completion([self dictionaryFromState:state], nil);
@@ -289,6 +562,7 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
     state.expiresAt = entry.expiresAt > now + 600 ? entry.expiresAt : now + 600;
     state.fromSharedSeed = YES;
     self.state = state;
+    [self persistCurrentState];
     NSLog(@"[XuperPad] sesion: credencial compartida adoptada");
     if (completion != nil) {
       completion([self dictionaryFromState:state], nil);
@@ -318,17 +592,7 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
            completion:(void (^)(NSDictionary *, NSError *))completion
 {
   XPSeedPool *pool = [XPSeedPool sharedPool];
-  NSMutableDictionary *parameters =
-      [[self deviceParametersWithSeed:entry.seed] mutableCopy];
-  [parameters setObject:@"" forKey:@"authVersion"];
-  [parameters setObject:@"" forKey:@"authCode"];
-  [parameters setObject:@"" forKey:@"preCode"];
-  [parameters setObject:XPFixedMacAddress forKey:@"macAddr"];
-  [parameters setObject:@"" forKey:@"reserve1"];
-  [parameters setObject:@4 forKey:@"openNum"];
-  [parameters setObject:@"default" forKey:@"channel"];
-  [parameters setObject:@"" forKey:@"matadata"];
-  [parameters setObject:@"" forKey:@"signdata"];
+  NSDictionary *parameters = [self activationParametersWithSeed:entry.seed snToken:@""];
 
   [self callPortalPath:@"v8/active"
             parameters:parameters
@@ -348,9 +612,14 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
     state.seed = entry.seed;
     state.userIdentifier = userIdentifier;
     state.userToken = userToken;
-    state.expiresAt = entry.expiresAt;
     state.fromSharedSeed = YES;
+    [self applyServerTimingToState:state activation:activation];
+    if (entry.expiresAt > 0 && entry.expiresAt < state.expiresAt) {
+      state.expiresAt = entry.expiresAt;
+    }
     self.state = state;
+    [self persistCurrentState];
+    [self startHeartbeat];
     if (completion != nil) {
       completion([self dictionaryFromState:state], nil);
     }
@@ -362,6 +631,7 @@ static NSUInteger const XPSessionMaxSeedAttempts = 3;
   return @{ @"seed" : state.seed ?: @"",
             @"userId" : state.userIdentifier ?: @"",
             @"userToken" : state.userToken ?: @"",
+            @"snToken" : state.snToken ?: @"",
             @"expiresAt" : @(state.expiresAt),
             @"fromSharedSeed" : @(state.fromSharedSeed) };
 }

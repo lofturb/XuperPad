@@ -52,6 +52,15 @@ extern NSArray *XPSessionDeadErrorCodes(void);
 /// Codigo de error del portal que indica bloqueo geografico.
 extern NSString *const XPGeoBlockedErrorCode;
 
+/// Codigo de error del portal que indica que la version del cliente fue retirada.
+extern NSString *const XPVersionRejectedErrorCode;
+
+/// Codigo de error del portal que indica que la credencial ya esta activa en otro dispositivo.
+extern NSString *const XPCredentialBusyErrorCode;
+
+/// Codigo de error del portal que indica que la sesion no esta iniciada.
+extern NSString *const XPSessionNotLoggedInErrorCode;
+
 /// Traduce el codigo y el mensaje del portal a un texto en castellano.
 extern NSString *XPPortalErrorMessage(NSString *returnCode, id rawMessage);
 

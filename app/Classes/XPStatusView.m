@@ -157,6 +157,15 @@ static const double XPPiValue = 3.14159265358979323846;
   self.hidden = YES;
 }
 
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event
+{
+  UIView *hit = [super hitTest:point withEvent:event];
+  if (hit == self) {
+    return nil;
+  }
+  return hit;
+}
+
 - (void)retryTapped:(id)sender
 {
   if (self.retryHandler != nil) {

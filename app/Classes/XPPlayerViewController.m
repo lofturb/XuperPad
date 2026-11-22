@@ -27,6 +27,7 @@ static const NSTimeInterval XPPlayerToastTimeout = 2.4;
 static const CGFloat XPPlayerChapterBarHeight = 84.0f;
 static const CGFloat XPPlayerOptionsHeight = 226.0f;
 static const double XPPlayerChapterRestartLimit = 8.0;
+static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 
 @interface XPPlayerViewController () <XPDecoderDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, strong) AVPlayer *player;
@@ -46,7 +47,9 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 @property (nonatomic, strong) NSTimer *refreshTimer;
 @property (nonatomic, strong) NSTimer *subtitleTimer;
 @property (nonatomic, strong) NSTimer *toastTimer;
+@property (nonatomic, strong) NSTimer *endTimer;
 @property (nonatomic, assign) BOOL userPaused;
+@property (nonatomic, assign) BOOL playbackFinished;
 @property (nonatomic, assign) BOOL chapterBarVisible;
 @property (nonatomic, assign) BOOL optionsPanelVisible;
 @property (nonatomic, assign) float playbackRate;
@@ -258,6 +261,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 - (void)startPlayback
 {
   [self stopPlayback];
+  self.playbackFinished = NO;
   if (self.currentIndex >= self.addressQueue.count) {
     [self.statusView showMessage:@"No se pudo reproducir el contenido." retry:YES];
     return;
@@ -390,6 +394,8 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 {
   [self.startTimeout invalidate];
   self.startTimeout = nil;
+  [self.endTimer invalidate];
+  self.endTimer = nil;
 
   if (self.decoder != nil) {
     [self.decoder stop];
@@ -492,6 +498,12 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 
 - (void)togglePlayPause
 {
+  if (self.decoder == nil && self.player == nil && self.playbackFinished) {
+    self.playbackFinished = NO;
+    self.currentIndex = 0;
+    [self startPlayback];
+    return;
+  }
   if (self.decoder != nil) {
     self.userPaused = !self.userPaused;
     self.decoder.paused = self.userPaused;
@@ -533,6 +545,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   if (self.chapters.count == 0) {
     return;
   }
+  [self cancelAutomaticChapter];
   if ([self elapsedSeconds] > XPPlayerChapterRestartLimit) {
     [self seekToFraction:0.0f];
     [self showTransientMessage:@"Repitiendo el capítulo actual"];
@@ -552,6 +565,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   if (self.chapters.count == 0) {
     return;
   }
+  [self cancelAutomaticChapter];
   NSInteger index = self.currentChapterIndex + 1;
   if (index >= (NSInteger)self.chapters.count) {
     [self showTransientMessage:@"Es el último capítulo disponible"];
@@ -562,6 +576,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 
 - (void)chapterSelectedAtIndex:(NSInteger)index
 {
+  [self cancelAutomaticChapter];
   if (index == self.currentChapterIndex) {
     [self seekToFraction:0.0f];
     return;
@@ -569,11 +584,19 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   [self openChapterAtIndex:index];
 }
 
+- (void)cancelAutomaticChapter
+{
+  [self.endTimer invalidate];
+  self.endTimer = nil;
+}
+
 - (void)openChapterAtIndex:(NSInteger)index
 {
   if (index < 0 || index >= (NSInteger)self.chapters.count) {
     return;
   }
+  [self cancelAutomaticChapter];
+  self.playbackFinished = NO;
   id item = self.chapters[index];
   if (![item isKindOfClass:[NSDictionary class]]) {
     return;
@@ -940,7 +963,41 @@ static const double XPPlayerChapterRestartLimit = 8.0;
     return;
   }
   [self stopPlayback];
+  [self handlePlaybackFinished:message];
+}
+
+- (void)handlePlaybackFinished:(NSString *)message
+{
+  self.playbackFinished = YES;
+  self.userPaused = YES;
+  self.controls.playing = NO;
   [self.statusView showMessage:message ?: @"El contenido ha terminado." retry:NO];
+  NSInteger nextIndex = self.currentChapterIndex + 1;
+  if (self.chapters.count > 0 && nextIndex < (NSInteger)self.chapters.count) {
+    NSString *nextTitle = [self chapterTitleAtIndex:nextIndex];
+    [self showTransientMessage:[NSString stringWithFormat:@"Siguiente capítulo en %ld s: %@",
+                                 (long)XPPlayerNextChapterDelay, nextTitle]];
+    [self showControls];
+    [self.endTimer invalidate];
+    self.endTimer = [NSTimer scheduledTimerWithTimeInterval:XPPlayerNextChapterDelay
+                                                      target:self
+                                                    selector:@selector(advanceToNextChapter)
+                                                    userInfo:nil
+                                                     repeats:NO];
+    return;
+  }
+  [self showTransientMessage:message ?: @"El contenido ha terminado"];
+  [self showControls];
+}
+
+- (void)advanceToNextChapter
+{
+  self.endTimer = nil;
+  NSInteger nextIndex = self.currentChapterIndex + 1;
+  if (nextIndex >= (NSInteger)self.chapters.count) {
+    return;
+  }
+  [self openChapterAtIndex:nextIndex];
 }
 
 - (void)dealloc
@@ -949,6 +1006,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   [self.subtitleTimer invalidate];
   [self.toastTimer invalidate];
   [self.startTimeout invalidate];
+  [self.endTimer invalidate];
   [self stopPlayback];
 }
 
