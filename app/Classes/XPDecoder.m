@@ -4,9 +4,11 @@
 #import "XPConstants.h"
 
 #import <libavcodec/avcodec.h>
+#import <libavcodec/codec_desc.h>
 #import <libavformat/avformat.h>
 #import <libavformat/avio.h>
 #import <libavutil/channel_layout.h>
+#import <libavutil/dict.h>
 #import <libavutil/error.h>
 #import <libavutil/frame.h>
 #import <libavutil/log.h>
@@ -25,17 +27,31 @@ typedef struct {
   AVFormatContext *format;
   AVCodecContext *video;
   AVCodecContext *audio;
+  AVCodecContext *subtitle;
   AVFrame *frame;
   AVPacket *packet;
+  AVFrame *videoFrame;
   struct SwsContext *scale;
   SwrContext *resample;
   int videoIndex;
   int audioIndex;
+  int subtitleIndex;
   int width;
   int height;
   uint8_t *rgb;
   int rgbSize;
+  int audioSampleRate;
+  int audioChannels;
+  int64_t audioChannelLayout;
 } XPFFmpegContext;
+
+@interface XPQueuedPacket : NSObject
+@property (nonatomic, assign) AVPacket *packet;
+@property (nonatomic, assign) int64_t generation;
+@end
+
+@implementation XPQueuedPacket
+@end
 
 @implementation XPVideoFrameData
 
@@ -50,6 +66,12 @@ typedef struct {
 
 @end
 
+@implementation XPTrackInfo
+@end
+
+@implementation XPSubtitleCue
+@end
+
 @interface XPDecoder () {
   XPFFmpegContext *state;
   NSString *streamAddress;
@@ -62,10 +84,12 @@ typedef struct {
   BOOL hasAudioStart;
   double videoStartPTS;
   double audioStartPTS;
+  double audioOffset;
   double videoWall;
   NSString *failureDetail;
   NSUInteger videoPacketCount;
   NSUInteger audioPacketCount;
+  NSUInteger subtitlePacketCount;
   NSUInteger frameCount;
   CFAbsoluteTime lastProgressAt;
   double readSeconds;
@@ -82,6 +106,7 @@ typedef struct {
   double lastScaleSeconds;
   double lastCopySeconds;
   double latestPTS;
+  double demuxPTS;
   double lastAudioClock;
   CFAbsoluteTime lastAudioClockAt;
   volatile BOOL audioClockHealthy;
@@ -99,29 +124,65 @@ typedef struct {
   BOOL hasPendingSeek;
   double pendingSeekTime;
   BOOL directUploadActive;
+  NSMutableArray *videoPackets;
+  NSCondition *videoCondition;
+  volatile int64_t videoGeneration;
+  int64_t decodedVideoGeneration;
+  BOOL videoThreadFinished;
+  NSCondition *videoExitCondition;
+  NSMutableArray *audioTracks;
+  NSMutableArray *subtitleTracks;
+  NSInteger selectedAudioIndex;
+  NSInteger selectedSubtitleIndex;
+  BOOL hasPendingAudioSelection;
+  NSInteger pendingAudioIndex;
+  BOOL hasPendingSubtitleSelection;
+  NSInteger pendingSubtitleIndex;
+  BOOL hasPendingRate;
+  float pendingRate;
+  float playbackRate;
+  NSMutableArray *subtitleCues;
+  NSLock *subtitleLock;
+  NSString *informationText;
+  int outputSampleRate;
 }
 
 - (void)decodeLoop;
+- (void)videoDecodeLoop;
 - (void)presentLoop;
 - (void)deliverPendingFrame;
 - (BOOL)openInput;
 - (void)closeInput;
-- (void)openAudioWithCodec:(const AVCodec *)audioCodec;
-- (void)decodeVideoPacket;
+- (void)openAudioForStreamIndex:(int)streamIndex;
+- (void)closeAudioDecoder;
+- (void)openSubtitleForStreamIndex:(int)streamIndex;
+- (void)closeSubtitleDecoder;
+- (void)decodeVideoPacket:(AVPacket *)packet generation:(int64_t)generation;
 - (void)decodeAudioPacket;
+- (void)decodeSubtitlePacket;
+- (void)enqueueVideoPacket;
+- (XPQueuedPacket *)takeVideoPacket;
 - (void)pushFrame:(XPVideoFrameData *)frame;
 - (XPVideoFrameData *)nextFrameToShow;
 - (XPVideoFrameData *)yuvFrameFromFrame:(AVFrame *)frame;
 - (XPVideoFrameData *)rgbFrameFromFrame:(AVFrame *)frame;
 - (void)throttleIfNeeded;
+- (void)waitForVideoPace:(double)pts;
 - (void)performPendingSeek;
+- (void)applyPendingSelections;
 - (double)masterClock;
 - (void)updateClockHealth;
 - (void)reportVideoSize:(int)width height:(int)height;
 - (void)reportFailure:(NSString *)message;
 - (void)reportEndOfStream;
 - (void)broadcastFrames;
+- (void)broadcastVideoPackets;
+- (void)reportTracks;
 - (void)setFailureDetail:(NSString *)detail;
+- (void)markVideoThreadFinished;
+- (void)rebuildInformationText;
+- (double)packetTime:(AVPacket *)packet streamIndex:(int)streamIndex;
+- (void)resetAudioOutputWithRate:(int)rate;
 
 @end
 
@@ -134,6 +195,9 @@ static NSString *XPFFmpegErrorText(int code)
 }
 
 static const NSUInteger XPVideoQueueLimit = 6;
+static const NSUInteger XPVideoPacketLimit = 32;
+static const double XPDemuxLeadSeconds = 0.50;
+static const double XPVideoLeadSeconds = 0.30;
 
 static double XPResidentMegabytes(void)
 {
@@ -197,6 +261,111 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   NSLog(@"[XuperPad] ffmpeg: %s", buffer);
 }
 
+static NSString *XPDictionaryValue(AVDictionary *dictionary, NSString *key)
+{
+  if (dictionary == NULL || key.length == 0) {
+    return nil;
+  }
+  const char *value = av_dict_get(dictionary, [key UTF8String], NULL, 0);
+  if (value == NULL) {
+    return nil;
+  }
+  return [NSString stringWithUTF8String:value];
+}
+
+static NSString *XPLanguageName(NSString *code)
+{
+  if (code.length == 0) {
+    return @"Sin idioma";
+  }
+  NSString *key = [[code substringToIndex:MIN((NSUInteger)3, code.length)] lowercaseString];
+  NSDictionary *names = @{ @"spa" : @"Español",
+                           @"eng" : @"Inglés",
+                           @"jpn" : @"Japonés",
+                           @"fra" : @"Francés",
+                           @"fre" : @"Francés",
+                           @"deu" : @"Alemán",
+                           @"ger" : @"Alemán",
+                           @"por" : @"Portugués",
+                           @"ita" : @"Italiano",
+                           @"rus" : @"Ruso",
+                           @"zho" : @"Chino",
+                           @"chi" : @"Chino",
+                           @"kor" : @"Coreano",
+                           @"ara" : @"Árabe",
+                           @"hin" : @"Hindi",
+                           @"tur" : @"Turco",
+                           @"pol" : @"Polaco",
+                           @"nld" : @"Neerlandés",
+                           @"dut" : @"Neerlandés",
+                           @"swe" : @"Sueco",
+                           @"nor" : @"Noruego",
+                           @"dan" : @"Danés",
+                           @"fin" : @"Finés",
+                           @"ces" : @"Checo",
+                           @"cze" : @"Checo",
+                           @"ell" : @"Griego",
+                           @"gre" : @"Griego",
+                           @"heb" : @"Hebreo",
+                           @"hun" : @"Húngaro",
+                           @"ron" : @"Rumano",
+                           @"rum" : @"Rumano",
+                           @"ukr" : @"Ucraniano",
+                           @"vie" : @"Vietnamita",
+                           @"tha" : @"Tailandés",
+                           @"ind" : @"Indonesio",
+                           @"msa" : @"Malayo",
+                           @"may" : @"Malayo",
+                           @"cat" : @"Catalán",
+                           @"eus" : @"Euskera",
+                           @"baq" : @"Euskera",
+                           @"glg" : @"Gallego",
+                           @"bul" : @"Búlgaro",
+                           @"srp" : @"Serbio",
+                           @"hrv" : @"Croata",
+                           @"slv" : @"Esloveno",
+                           @"slk" : @"Eslovaco",
+                           @"lit" : @"Lituano",
+                           @"lav" : @"Letón",
+                           @"est" : @"Estonio",
+                           @"mul" : @"Multilingüe",
+                           @"und" : @"Sin idioma",
+                           @"zxx" : @"Sin texto",
+                           @"qaa" : @"Desconocido" };
+  NSString *name = [names objectForKey:key];
+  if (name != nil) {
+    return name;
+  }
+  return code.uppercaseString;
+}
+
+static NSString *XPASSLineText(const char *ass)
+{
+  if (ass == NULL) {
+    return nil;
+  }
+  NSString *line = [NSString stringWithUTF8String:ass];
+  if (line.length == 0) {
+    return nil;
+  }
+  NSArray *parts = [line componentsSeparatedByString:@","];
+  if (parts.count < 10) {
+    NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return trimmed.length > 0 ? trimmed : nil;
+  }
+  NSMutableArray *tail = [NSMutableArray array];
+  for (NSUInteger index = 9; index < parts.count; index++) {
+    [tail addObject:[parts objectAtIndex:index]];
+  }
+  NSString *text = [tail componentsJoinedByString:@","];
+  text = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  text = [text stringByReplacingOccurrencesOfString:@"\\N" withString:@"\n"];
+  text = [text stringByReplacingOccurrencesOfString:@"\\n" withString:@"\n"];
+  text = [text stringByReplacingOccurrencesOfString:@"\\h" withString:@" "];
+  return text.length > 0 ? text : nil;
+}
+
 @implementation XPDecoder
 
 - (instancetype)init
@@ -205,11 +374,19 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   if (self != nil) {
     frames = [NSMutableArray array];
     frameCondition = [[NSCondition alloc] init];
+    videoPackets = [NSMutableArray array];
+    videoCondition = [[NSCondition alloc] init];
+    videoExitCondition = [[NSCondition alloc] init];
+    audioTracks = [NSMutableArray array];
+    subtitleTracks = [NSMutableArray array];
+    subtitleCues = [NSMutableArray array];
+    subtitleLock = [[NSLock alloc] init];
     running = NO;
     state = NULL;
     failureDetail = nil;
     videoPacketCount = 0;
     audioPacketCount = 0;
+    subtitlePacketCount = 0;
     frameCount = 0;
     lastProgressAt = 0;
     readSeconds = 0;
@@ -226,6 +403,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     lastScaleSeconds = 0;
     lastCopySeconds = 0;
     latestPTS = 0;
+    demuxPTS = 0;
     lastAudioClock = 0;
     lastAudioClockAt = 0;
     audioClockHealthy = NO;
@@ -243,6 +421,20 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     hasPendingSeek = NO;
     pendingSeekTime = 0;
     directUploadActive = NO;
+    videoGeneration = 0;
+    decodedVideoGeneration = 0;
+    videoThreadFinished = YES;
+    selectedAudioIndex = -1;
+    selectedSubtitleIndex = -1;
+    hasPendingAudioSelection = NO;
+    pendingAudioIndex = -1;
+    hasPendingSubtitleSelection = NO;
+    pendingSubtitleIndex = -1;
+    hasPendingRate = NO;
+    pendingRate = 1.0f;
+    playbackRate = 1.0f;
+    informationText = @"";
+    outputSampleRate = 0;
   }
   return self;
 }
@@ -250,6 +442,56 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
 - (BOOL)isRunning
 {
   return running;
+}
+
+- (NSArray *)audioTracks
+{
+  return [audioTracks copy];
+}
+
+- (NSArray *)subtitleTracks
+{
+  return [subtitleTracks copy];
+}
+
+- (NSInteger)selectedAudioTrackIndex
+{
+  return selectedAudioIndex;
+}
+
+- (NSInteger)selectedSubtitleTrackIndex
+{
+  return selectedSubtitleIndex;
+}
+
+- (NSString *)informationText
+{
+  return informationText ?: @"";
+}
+
+- (XPSubtitleCue *)activeSubtitle
+{
+  double clock = [self masterClock];
+  if (clock <= 0.0) {
+    return nil;
+  }
+  [subtitleLock lock];
+  XPSubtitleCue *found = nil;
+  NSMutableArray *expired = [NSMutableArray array];
+  for (XPSubtitleCue *cue in subtitleCues) {
+    if (cue.end < clock - 5.0) {
+      [expired addObject:cue];
+      continue;
+    }
+    if (clock >= cue.start && clock <= cue.end) {
+      found = cue;
+    }
+  }
+  if (expired.count > 0) {
+    [subtitleCues removeObjectsInArray:expired];
+  }
+  [subtitleLock unlock];
+  return found;
 }
 
 - (BOOL)startWithAddress:(NSString *)address headers:(NSDictionary *)headers
@@ -264,14 +506,22 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   streamHeaders = [headers copy] ?: @{};
   frames = [NSMutableArray array];
   frameCondition = [[NSCondition alloc] init];
+  videoPackets = [NSMutableArray array];
+  videoCondition = [[NSCondition alloc] init];
+  videoExitCondition = [[NSCondition alloc] init];
+  audioTracks = [NSMutableArray array];
+  subtitleTracks = [NSMutableArray array];
+  subtitleCues = [NSMutableArray array];
   hasVideoStart = NO;
   hasAudioStart = NO;
   videoStartPTS = 0;
   audioStartPTS = 0;
+  audioOffset = 0;
   videoWall = 0;
   failureDetail = nil;
   videoPacketCount = 0;
   audioPacketCount = 0;
+  subtitlePacketCount = 0;
   frameCount = 0;
   lastProgressAt = 0;
   readSeconds = 0;
@@ -288,6 +538,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   lastScaleSeconds = 0;
   lastCopySeconds = 0;
   latestPTS = 0;
+  demuxPTS = 0;
   lastAudioClock = 0;
   lastAudioClockAt = 0;
   audioClockHealthy = NO;
@@ -304,6 +555,20 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   hasPendingSeek = NO;
   pendingSeekTime = 0;
   directUploadActive = NO;
+  videoGeneration = 0;
+  decodedVideoGeneration = 0;
+  videoThreadFinished = YES;
+  selectedAudioIndex = -1;
+  selectedSubtitleIndex = -1;
+  hasPendingAudioSelection = NO;
+  pendingAudioIndex = -1;
+  hasPendingSubtitleSelection = NO;
+  pendingSubtitleIndex = -1;
+  hasPendingRate = NO;
+  pendingRate = 1.0f;
+  playbackRate = 1.0f;
+  informationText = @"";
+  outputSampleRate = 0;
   running = YES;
   NSLog(@"[XuperPad] decodificador: inicio %@", address);
 
@@ -325,6 +590,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
   running = NO;
   [self broadcastFrames];
+  [self broadcastVideoPackets];
   [audioOutput stop];
 }
 
@@ -341,12 +607,22 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       [self reportFailure:@"no se pudo abrir la direccion de video"];
       running = NO;
       [self broadcastFrames];
+      [self broadcastVideoPackets];
       return;
     }
     XPFFmpegVerbose = NO;
+
+    videoThreadFinished = NO;
+    NSThread *videoThread = [[NSThread alloc] initWithTarget:self
+                                                     selector:@selector(videoDecodeLoop)
+                                                       object:nil];
+    videoThread.name = @"XuperPad.video";
+    [videoThread start];
+
     BOOL ended = NO;
     while (running) {
       @autoreleasepool {
+        [self applyPendingSelections];
         [self performPendingSeek];
         if (!running) {
           break;
@@ -375,16 +651,22 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
           }
           break;
         }
-        if (state->packet->stream_index == state->videoIndex) {
+        int streamIndex = state->packet->stream_index;
+        double packetTime = [self packetTime:state->packet streamIndex:streamIndex];
+        if (packetTime > demuxPTS) {
+          demuxPTS = packetTime;
+        }
+        if (streamIndex == state->videoIndex) {
           videoPacketCount++;
-          CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
-          [self decodeVideoPacket];
-          videoDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
-        } else if (state->packet->stream_index == state->audioIndex) {
+          [self enqueueVideoPacket];
+        } else if (streamIndex == state->audioIndex) {
           audioPacketCount++;
           CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
           [self decodeAudioPacket];
           audioDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
+        } else if (streamIndex == state->subtitleIndex) {
+          subtitlePacketCount++;
+          [self decodeSubtitlePacket];
         }
         av_packet_unref(state->packet);
 
@@ -406,6 +688,9 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
           [frameCondition lock];
           NSUInteger queued = frames.count;
           [frameCondition unlock];
+          [videoCondition lock];
+          NSUInteger queuedPackets = videoPackets.count;
+          [videoCondition unlock];
           double lag = latestPTS - [self masterClock];
           double playedSound = 0;
           double queuedSound = 0;
@@ -425,9 +710,10 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
           if (pcmSampleCount > 0) {
             rms = sqrt((double)pcmSquareSum / (double)pcmSampleCount);
           }
-          NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs copia %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu retraso %.2fs sonido %.1fs en cola %.1fs libres %lu llamadas %lu pico %d rms %d medidor %.1f/%.1f memoria %.1f MB directo %d",
+          NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu subtitulos %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs copia %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu paquetes %lu retraso %.2fs sonido %.1fs en cola %.1fs libres %lu llamadas %lu pico %d rms %d medidor %.1f/%.1f memoria %.1f MB directo %d pista %ld",
                 (unsigned long)videoPacketCount,
                 (unsigned long)audioPacketCount,
+                (unsigned long)subtitlePacketCount,
                 (unsigned long)frameCount,
                 framesDelta / window,
                 bytesDelta / 1024.0 / window,
@@ -439,6 +725,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
                 (double)bytesRead / (1024.0 * 1024.0),
                 slowestReadSeconds,
                 (unsigned long)queued,
+                (unsigned long)queuedPackets,
                 lag,
                 playedSound,
                 queuedSound,
@@ -449,7 +736,8 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
                 meterPeak,
                 meterAverage,
                 XPResidentMegabytes(),
-                directUploadActive ? 1 : 0);
+                directUploadActive ? 1 : 0,
+                (long)state->audioIndex);
           lastProgressAt = now;
           lastBytesRead = bytesRead;
           lastFrameCount = frameCount;
@@ -465,6 +753,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       }
     }
     BOOL cancelled = !running;
+    [self waitForVideoThread];
     [self closeInput];
     if (!cancelled) {
       if (ended) {
@@ -476,6 +765,102 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       }
     }
   }
+}
+
+- (void)waitForVideoThread
+{
+  for (int guard = 0; guard < 300; guard++) {
+    [videoExitCondition lock];
+    BOOL finished = videoThreadFinished;
+    [videoExitCondition unlock];
+    if (finished) {
+      return;
+    }
+    [NSThread sleepForTimeInterval:0.02];
+  }
+  NSLog(@"[XuperPad] decodificador: el hilo de video no termino a tiempo");
+}
+
+- (void)markVideoThreadFinished
+{
+  [videoExitCondition lock];
+  videoThreadFinished = YES;
+  [videoExitCondition broadcast];
+  [videoExitCondition unlock];
+}
+
+- (void)videoDecodeLoop
+{
+  while (running) {
+    @autoreleasepool {
+      XPQueuedPacket *item = [self takeVideoPacket];
+      if (item == nil) {
+        continue;
+      }
+      AVPacket *packet = item.packet;
+      int64_t generation = item.generation;
+      if (generation != decodedVideoGeneration) {
+        decodedVideoGeneration = generation;
+        if (state != NULL && state->video != NULL) {
+          avcodec_flush_buffers(state->video);
+        }
+      }
+      [self decodeVideoPacket:packet generation:generation];
+      av_packet_free(&packet);
+    }
+  }
+  [self markVideoThreadFinished];
+}
+
+- (void)enqueueVideoPacket
+{
+  if (state == NULL || state->packet == NULL) {
+    return;
+  }
+  AVPacket *copy = av_packet_alloc();
+  if (copy == NULL) {
+    return;
+  }
+  if (av_packet_ref(copy, state->packet) < 0) {
+    av_packet_free(&copy);
+    return;
+  }
+  XPQueuedPacket *item = [[XPQueuedPacket alloc] init];
+  item.packet = copy;
+  item.generation = videoGeneration;
+  [videoCondition lock];
+  [videoPackets addObject:item];
+  while (videoPackets.count > XPVideoPacketLimit) {
+    XPQueuedPacket *dropped = [videoPackets firstObject];
+    [videoPackets removeObjectAtIndex:0];
+    if (dropped.packet != NULL) {
+      av_packet_free(&dropped.packet);
+    }
+  }
+  [videoCondition broadcast];
+  [videoCondition unlock];
+}
+
+- (XPQueuedPacket *)takeVideoPacket
+{
+  [videoCondition lock];
+  while (running && videoPackets.count == 0) {
+    [videoCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+  }
+  XPQueuedPacket *item = nil;
+  if (videoPackets.count > 0) {
+    item = [videoPackets firstObject];
+    [videoPackets removeObjectAtIndex:0];
+  }
+  [videoCondition unlock];
+  return item;
+}
+
+- (void)broadcastVideoPackets
+{
+  [videoCondition lock];
+  [videoCondition broadcast];
+  [videoCondition unlock];
 }
 
 - (void)presentLoop
@@ -570,15 +955,22 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     [clockLock unlock];
     return frozen;
   }
+  BOOL audioReady = hasAudioStart && audioOutput != nil && audioClockHealthy;
+  double start = audioReady ? audioStartPTS : 0.0;
+  double offset = audioOffset;
+  double rate = (double)playbackRate;
+  BOOL videoReady = hasVideoStart;
+  double videoStart = videoStartPTS;
+  double wall = videoWall;
   [clockLock unlock];
 
-  if (hasAudioStart && audioOutput != nil && audioClockHealthy) {
-    return audioStartPTS + [audioOutput playedSeconds];
+  if (audioReady) {
+    return start + offset + [audioOutput playedSeconds] * rate;
   }
-  if (hasVideoStart) {
-    return videoStartPTS + (CFAbsoluteTimeGetCurrent() - videoWall);
+  if (videoReady) {
+    return videoStart + (CFAbsoluteTimeGetCurrent() - wall);
   }
-  return 0;
+  return 0.0;
 }
 
 - (BOOL)isPaused
@@ -645,6 +1037,157 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   return YES;
 }
 
+- (BOOL)selectAudioTrack:(NSInteger)streamIndex
+{
+  if (!running) {
+    return NO;
+  }
+  [clockLock lock];
+  pendingAudioIndex = streamIndex;
+  hasPendingAudioSelection = YES;
+  [clockLock unlock];
+  return YES;
+}
+
+- (BOOL)selectSubtitleTrack:(NSInteger)streamIndex
+{
+  if (!running) {
+    return NO;
+  }
+  [clockLock lock];
+  pendingSubtitleIndex = streamIndex;
+  hasPendingSubtitleSelection = YES;
+  [clockLock unlock];
+  return YES;
+}
+
+- (void)setPlaybackRate:(float)rate
+{
+  if (rate < 0.25f) {
+    rate = 0.25f;
+  }
+  if (rate > 4.0f) {
+    rate = 4.0f;
+  }
+  [clockLock lock];
+  pendingRate = rate;
+  hasPendingRate = YES;
+  [clockLock unlock];
+}
+
+- (void)applyPendingSelections
+{
+  [clockLock lock];
+  BOOL wantsAudio = hasPendingAudioSelection;
+  NSInteger audioIndex = pendingAudioIndex;
+  hasPendingAudioSelection = NO;
+  BOOL wantsSubtitle = hasPendingSubtitleSelection;
+  NSInteger subtitleIndex = pendingSubtitleIndex;
+  hasPendingSubtitleSelection = NO;
+  BOOL wantsRate = hasPendingRate;
+  float rate = pendingRate;
+  hasPendingRate = NO;
+  [clockLock unlock];
+
+  if (wantsAudio && state != NULL) {
+    if (audioIndex != state->audioIndex) {
+      [self closeAudioDecoder];
+      state->audioIndex = -1;
+      selectedAudioIndex = -1;
+      if (audioIndex >= 0 && audioIndex < (NSInteger)state->format->nb_streams) {
+        [self openAudioForStreamIndex:(int)audioIndex];
+      }
+      [self reportTracks];
+    }
+  }
+
+  if (wantsSubtitle && state != NULL) {
+    if (subtitleIndex != state->subtitleIndex) {
+      [self closeSubtitleDecoder];
+      state->subtitleIndex = -1;
+      selectedSubtitleIndex = -1;
+      [subtitleLock lock];
+      [subtitleCues removeAllObjects];
+      [subtitleLock unlock];
+      if (subtitleIndex >= 0 && subtitleIndex < (NSInteger)state->format->nb_streams) {
+        [self openSubtitleForStreamIndex:(int)subtitleIndex];
+      }
+      [self reportTracks];
+    }
+  }
+
+  if (wantsRate && state != NULL && state->audio != NULL) {
+    [self applyRate:rate];
+  }
+}
+
+- (void)applyRate:(float)rate
+{
+  if (state == NULL || state->audio == NULL || state->resample == NULL) {
+    [clockLock lock];
+    playbackRate = rate;
+    [clockLock unlock];
+    return;
+  }
+  int sourceRate = state->audioSampleRate > 0 ? state->audioSampleRate : 44100;
+  int targetRate = (int)((double)sourceRate * (double)rate);
+  if (targetRate < 8000) {
+    targetRate = 8000;
+  }
+  int64_t layout = state->audioChannelLayout;
+  if (layout == 0 && state->audioChannels > 0) {
+    layout = av_get_default_channel_layout(state->audioChannels);
+  }
+  SwrContext *resample = swr_alloc_set_opts(NULL,
+                                             AV_CH_LAYOUT_STEREO,
+                                             AV_SAMPLE_FMT_S16,
+                                             targetRate,
+                                             layout,
+                                             (enum AVSampleFormat)state->audio->sample_fmt,
+                                             state->audio->sample_rate,
+                                             0,
+                                             NULL);
+  if (resample == NULL) {
+    NSLog(@"[XuperPad] decodificador: no se pudo crear el remuestreador a %.2fx", rate);
+    return;
+  }
+  if (swr_init(resample) < 0) {
+    swr_free(&resample);
+    NSLog(@"[XuperPad] decodificador: no se pudo iniciar el remuestreador a %.2fx", rate);
+    return;
+  }
+  swr_free(&state->resample);
+  state->resample = resample;
+  [self resetAudioOutputWithRate:targetRate];
+  [clockLock lock];
+  playbackRate = rate;
+  [clockLock unlock];
+  NSLog(@"[XuperPad] decodificador: velocidad %.2fx con salida %d Hz", rate, targetRate);
+  [self reportTracks];
+}
+
+- (void)resetAudioOutputWithRate:(int)rate
+{
+  if (audioOutput == nil) {
+    outputSampleRate = rate;
+    return;
+  }
+  double before = [self masterClock];
+  if (![audioOutput resetWithSampleRate:rate channels:2]) {
+    NSLog(@"[XuperPad] decodificador: no se pudo reiniciar la salida de audio");
+    return;
+  }
+  outputSampleRate = rate;
+  [clockLock lock];
+  if (hasAudioStart) {
+    audioOffset = before - audioStartPTS;
+  }
+  lastAudioClock = 0;
+  lastAudioClockAt = CFAbsoluteTimeGetCurrent();
+  audioClockHealthy = hasAudioStart;
+  [clockLock unlock];
+}
+
 - (void)performPendingSeek
 {
   [clockLock lock];
@@ -666,20 +1209,42 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
           target, result, XPFFmpegErrorText(result));
     return;
   }
-  if (state->video != NULL) {
-    avcodec_flush_buffers(state->video);
-  }
   if (state->audio != NULL) {
     avcodec_flush_buffers(state->audio);
   }
+  if (state->subtitle != NULL) {
+    avcodec_flush_buffers(state->subtitle);
+  }
+  videoGeneration++;
+  [videoCondition lock];
+  for (XPQueuedPacket *item in videoPackets) {
+    if (item.packet != NULL) {
+      av_packet_free(&item.packet);
+    }
+  }
+  [videoPackets removeAllObjects];
+  [videoCondition broadcast];
+  [videoCondition unlock];
   [frameCondition lock];
   [frames removeAllObjects];
   [frameCondition unlock];
+  if (audioOutput != nil) {
+    [audioOutput resetWithSampleRate:outputSampleRate > 0 ? outputSampleRate : 44100 channels:2];
+  }
+  [subtitleLock lock];
+  [subtitleCues removeAllObjects];
+  [subtitleLock unlock];
   [clockLock lock];
   hasVideoStart = NO;
   hasAudioStart = NO;
   videoStartPTS = 0;
   audioStartPTS = 0;
+  audioOffset = 0;
+  latestPTS = 0;
+  demuxPTS = 0;
+  lastAudioClock = 0;
+  lastAudioClockAt = CFAbsoluteTimeGetCurrent();
+  audioClockHealthy = NO;
   videoWall = CFAbsoluteTimeGetCurrent();
   [clockLock unlock];
   NSLog(@"[XuperPad] decodificador: busqueda aplicada en %.1fs", target);
@@ -714,14 +1279,34 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       return;
     }
     double clock = [self masterClock];
-    if (clock <= 0 || latestPTS <= 0) {
+    if (clock <= 0 || demuxPTS <= 0) {
       return;
     }
-    double lag = latestPTS - clock;
-    if (lag <= 0.25) {
+    double lag = demuxPTS - clock;
+    if (lag <= XPDemuxLeadSeconds) {
       return;
     }
     if (lag > 4.0) {
+      return;
+    }
+    [NSThread sleepForTimeInterval:0.005];
+  }
+}
+
+- (void)waitForVideoPace:(double)pts
+{
+  if (pts <= 0) {
+    return;
+  }
+  for (int guard = 0; guard < 400; guard++) {
+    if (!running) {
+      return;
+    }
+    double clock = [self masterClock];
+    if (clock <= 0) {
+      return;
+    }
+    if (pts <= clock + XPVideoLeadSeconds) {
       return;
     }
     [NSThread sleepForTimeInterval:0.005];
@@ -737,6 +1322,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
   state->videoIndex = -1;
   state->audioIndex = -1;
+  state->subtitleIndex = -1;
   CFAbsoluteTime openStart = CFAbsoluteTimeGetCurrent();
 
   NSMutableString *headerText = [NSMutableString string];
@@ -841,48 +1427,150 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
         videoContext->pkt_timebase.num,
         videoContext->pkt_timebase.den);
 
+  [self enumerateTracks];
+
   AVCodec *audioCodec = NULL;
-  state->audioIndex = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0);
-  if (state->audioIndex >= 0 && audioCodec != NULL) {
-    [self openAudioWithCodec:audioCodec];
+  int bestAudio = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0);
+  NSInteger chosenAudio = -1;
+  for (XPTrackInfo *track in audioTracks) {
+    if (track.original) {
+      chosenAudio = track.streamIndex;
+      break;
+    }
+  }
+  if (chosenAudio < 0 && bestAudio >= 0) {
+    chosenAudio = bestAudio;
+  }
+  if (chosenAudio >= 0) {
+    [self openAudioForStreamIndex:(int)chosenAudio];
   }
 
   state->frame = av_frame_alloc();
   state->packet = av_packet_alloc();
-  if (state->frame == NULL || state->packet == NULL) {
+  state->videoFrame = av_frame_alloc();
+  if (state->frame == NULL || state->packet == NULL || state->videoFrame == NULL) {
     [self setFailureDetail:@"sin memoria para fotogramas y paquetes"];
     return NO;
   }
+  [self rebuildInformationText];
+  [self reportTracks];
   return YES;
 }
 
-- (void)openAudioWithCodec:(const AVCodec *)audioCodec
+- (void)enumerateTracks
 {
+  [audioTracks removeAllObjects];
+  [subtitleTracks removeAllObjects];
+  if (state == NULL || state->format == NULL) {
+    return;
+  }
+  AVFormatContext *format = state->format;
+  for (unsigned int index = 0; index < format->nb_streams; index++) {
+    AVStream *stream = format->streams[index];
+    if (stream == NULL || stream->codecpar == NULL) {
+      continue;
+    }
+    if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+      XPTrackInfo *track = [self trackInfoForStream:stream];
+      track.original = (stream->disposition & AV_DISPOSITION_DEFAULT) != 0;
+      AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+      track.available = (codec != NULL);
+      [audioTracks addObject:track];
+      NSLog(@"[XuperPad] decodificador: pista de audio %ld idioma %@ nombre %@ codec %@ original %d",
+            (long)stream->index,
+            track.languageCode.length > 0 ? track.languageCode : @"---",
+            track.languageName,
+            track.codecName,
+            track.original ? 1 : 0);
+      continue;
+    }
+    if (stream->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+      XPTrackInfo *track = [self trackInfoForStream:stream];
+      AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+      track.available = (codec != NULL);
+      [subtitleTracks addObject:track];
+      NSLog(@"[XuperPad] decodificador: pista de subtitulos %ld idioma %@ nombre %@ codec %@ disponible %d",
+            (long)stream->index,
+            track.languageCode.length > 0 ? track.languageCode : @"---",
+            track.languageName,
+            track.codecName,
+            track.available ? 1 : 0);
+    }
+  }
+}
+
+- (XPTrackInfo *)trackInfoForStream:(AVStream *)stream
+{
+  XPTrackInfo *track = [[XPTrackInfo alloc] init];
+  track.streamIndex = (NSInteger)stream->index;
+  NSString *language = XPDictionaryValue(stream->metadata, @"language");
+  if (language.length > 0) {
+    NSArray *parts = [language componentsSeparatedByString:@","];
+    NSString *first = [[parts firstObject] stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    track.languageCode = [first lowercaseString];
+  }
+  track.languageName = XPLanguageName(track.languageCode);
+  NSString *title = XPDictionaryValue(stream->metadata, @"title");
+  track.title = title.length > 0 ? title : @"";
+  AVCodecDescriptor *descriptor = avcodec_descriptor_get(stream->codecpar->codec_id);
+  if (descriptor != NULL && descriptor->name != NULL) {
+    track.codecName = [NSString stringWithUTF8String:descriptor->name];
+  } else {
+    track.codecName = @"desconocido";
+  }
+  return track;
+}
+
+- (void)openAudioForStreamIndex:(int)streamIndex
+{
+  if (state == NULL || state->format == NULL) {
+    return;
+  }
+  if (streamIndex < 0 || streamIndex >= (int)state->format->nb_streams) {
+    return;
+  }
+  AVStream *stream = state->format->streams[streamIndex];
+  if (stream == NULL || stream->codecpar == NULL) {
+    return;
+  }
+  AVCodec *audioCodec = avcodec_find_decoder(stream->codecpar->codec_id);
+  if (audioCodec == NULL) {
+    NSLog(@"[XuperPad] decodificador: la pista de audio %ld no tiene decodificador", (long)streamIndex);
+    return;
+  }
   AVCodecContext *audioContext = avcodec_alloc_context3(audioCodec);
   if (audioContext == NULL) {
     return;
   }
-  if (avcodec_parameters_to_context(audioContext, state->format->streams[state->audioIndex]->codecpar) < 0) {
+  if (avcodec_parameters_to_context(audioContext, stream->codecpar) < 0) {
     avcodec_free_context(&audioContext);
     return;
   }
-  audioContext->pkt_timebase = state->format->streams[state->audioIndex]->time_base;
+  audioContext->pkt_timebase = stream->time_base;
   audioContext->thread_count = 1;
   if (avcodec_open2(audioContext, audioCodec, NULL) < 0) {
     avcodec_free_context(&audioContext);
+    NSLog(@"[XuperPad] decodificador: no se pudo abrir el decodificador de audio %ld", (long)streamIndex);
     return;
   }
   state->audio = audioContext;
+  state->audioIndex = streamIndex;
+  state->audioSampleRate = audioContext->sample_rate;
+  state->audioChannels = audioContext->channels;
+  state->audioChannelLayout = audioContext->channel_layout;
+
   NSString *audioCodecName = audioCodec->name != NULL
                                ? [NSString stringWithUTF8String:audioCodec->name]
                                : @"desconocido";
-  NSLog(@"[XuperPad] decodificador: audio %@ %d Hz canales %d formato %d base %d/%d",
+  NSLog(@"[XuperPad] decodificador: audio %@ %d Hz canales %d formato %d base %d/%d pista %ld",
         audioCodecName,
         audioContext->sample_rate,
         audioContext->channels,
         (int)audioContext->sample_fmt,
         audioContext->pkt_timebase.num,
-        audioContext->pkt_timebase.den);
+        audioContext->pkt_timebase.den,
+        (long)streamIndex);
 
   int64_t inputLayout = audioContext->channel_layout;
   if (inputLayout == 0 && audioContext->channels > 0) {
@@ -890,13 +1578,22 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
   if (inputLayout == 0) {
     NSLog(@"[XuperPad] decodificador: el audio no tiene disposicion de canales utilizable");
+    [self closeAudioDecoder];
     return;
   }
   if (audioContext->sample_fmt == AV_SAMPLE_FMT_NONE) {
     NSLog(@"[XuperPad] decodificador: el audio no tiene formato de muestra utilizable");
+    [self closeAudioDecoder];
     return;
   }
-  int outputRate = audioContext->sample_rate > 0 ? audioContext->sample_rate : 44100;
+  [clockLock lock];
+  float rate = playbackRate;
+  [clockLock unlock];
+  int sourceRate = audioContext->sample_rate > 0 ? audioContext->sample_rate : 44100;
+  int outputRate = (int)((double)sourceRate * (double)rate);
+  if (outputRate < 8000) {
+    outputRate = 8000;
+  }
   SwrContext *resample = swr_alloc_set_opts(NULL,
                                              AV_CH_LAYOUT_STEREO,
                                              AV_SAMPLE_FMT_S16,
@@ -908,6 +1605,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
                                              NULL);
   if (resample == NULL) {
     NSLog(@"[XuperPad] decodificador: sin memoria para el remuestreador de audio");
+    [self closeAudioDecoder];
     return;
   }
   int resampleResult = swr_init(resample);
@@ -915,34 +1613,140 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     NSLog(@"[XuperPad] decodificador: swr_init fallo %d %@",
           resampleResult, XPFFmpegErrorText(resampleResult));
     swr_free(&resample);
+    [self closeAudioDecoder];
     return;
+  }
+  if (state->resample != NULL) {
+    swr_free(&state->resample);
   }
   state->resample = resample;
 
-  XPAudioOutput *output = [[XPAudioOutput alloc] init];
-  if ([output startWithSampleRate:outputRate channels:2]) {
-    audioOutput = output;
-    NSLog(@"[XuperPad] decodificador: salida de audio lista");
-  } else {
-    NSLog(@"[XuperPad] decodificador: la salida de audio no pudo iniciarse");
+  if (audioOutput == nil) {
+    XPAudioOutput *output = [[XPAudioOutput alloc] init];
+    if ([output startWithSampleRate:outputRate channels:2]) {
+      audioOutput = output;
+      outputSampleRate = outputRate;
+      NSLog(@"[XuperPad] decodificador: salida de audio lista a %d Hz", outputRate);
+    } else {
+      NSLog(@"[XuperPad] decodificador: la salida de audio no pudo iniciarse");
+    }
+  } else if (outputSampleRate != outputRate) {
+    [self resetAudioOutputWithRate:outputRate];
   }
+
+  selectedAudioIndex = streamIndex;
+  NSLog(@"[XuperPad] decodificador: pista de audio activa %ld", (long)streamIndex);
 }
 
-- (void)decodeVideoPacket
+- (void)closeAudioDecoder
 {
-  if (state->video == NULL) {
+  if (state == NULL) {
     return;
   }
-  int sendResult = avcodec_send_packet(state->video, state->packet);
+  if (state->audio != NULL) {
+    avcodec_free_context(&state->audio);
+    state->audio = NULL;
+  }
+  if (state->resample != NULL) {
+    swr_free(&state->resample);
+    state->resample = NULL;
+  }
+  state->audioIndex = -1;
+  state->audioSampleRate = 0;
+  state->audioChannels = 0;
+  state->audioChannelLayout = 0;
+}
+
+- (void)openSubtitleForStreamIndex:(int)streamIndex
+{
+  if (state == NULL || state->format == NULL) {
+    return;
+  }
+  if (streamIndex < 0 || streamIndex >= (int)state->format->nb_streams) {
+    return;
+  }
+  AVStream *stream = state->format->streams[streamIndex];
+  if (stream == NULL || stream->codecpar == NULL) {
+    return;
+  }
+  AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+  if (codec == NULL) {
+    NSLog(@"[XuperPad] decodificador: la pista de subtitulos %ld no tiene decodificador",
+          (long)streamIndex);
+    return;
+  }
+  AVCodecContext *context = avcodec_alloc_context3(codec);
+  if (context == NULL) {
+    return;
+  }
+  if (avcodec_parameters_to_context(context, stream->codecpar) < 0) {
+    avcodec_free_context(&context);
+    return;
+  }
+  context->pkt_timebase = stream->time_base;
+  if (avcodec_open2(context, codec, NULL) < 0) {
+    avcodec_free_context(&context);
+    NSLog(@"[XuperPad] decodificador: no se pudo abrir el decodificador de subtitulos %ld",
+          (long)streamIndex);
+    return;
+  }
+  state->subtitle = context;
+  state->subtitleIndex = streamIndex;
+  selectedSubtitleIndex = streamIndex;
+  NSLog(@"[XuperPad] decodificador: pista de subtitulos activa %ld", (long)streamIndex);
+}
+
+- (void)closeSubtitleDecoder
+{
+  if (state == NULL) {
+    return;
+  }
+  if (state->subtitle != NULL) {
+    avcodec_free_context(&state->subtitle);
+    state->subtitle = NULL;
+  }
+  state->subtitleIndex = -1;
+}
+
+- (double)packetTime:(AVPacket *)packet streamIndex:(int)streamIndex
+{
+  if (packet == NULL || state == NULL || state->format == NULL) {
+    return 0.0;
+  }
+  if (streamIndex < 0 || streamIndex >= (int)state->format->nb_streams) {
+    return 0.0;
+  }
+  int64_t timestamp = packet->pts;
+  if (timestamp == AV_NOPTS_VALUE) {
+    timestamp = packet->dts;
+  }
+  if (timestamp == AV_NOPTS_VALUE) {
+    return 0.0;
+  }
+  AVRational timeBase = state->format->streams[streamIndex]->time_base;
+  return timestamp * av_q2d(timeBase);
+}
+
+- (void)decodeVideoPacket:(AVPacket *)packet generation:(int64_t)generation
+{
+  if (state == NULL || state->video == NULL || packet == NULL) {
+    return;
+  }
+  double packetPTS = [self packetTime:packet streamIndex:state->videoIndex];
+  [self waitForVideoPace:packetPTS];
+
+  CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
+  int sendResult = avcodec_send_packet(state->video, packet);
   if (sendResult < 0) {
     if (videoPacketCount <= 2) {
       NSLog(@"[XuperPad] decodificador: avcodec_send_packet fallo %d %@",
             sendResult, XPFFmpegErrorText(sendResult));
     }
+    videoDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
     return;
   }
-  while (avcodec_receive_frame(state->video, state->frame) == 0) {
-    AVFrame *frame = state->frame;
+  while (avcodec_receive_frame(state->video, state->videoFrame) == 0) {
+    AVFrame *frame = state->videoFrame;
     if (frame->width <= 0 || frame->height <= 0 || frame->format < 0) {
       av_frame_unref(frame);
       continue;
@@ -974,7 +1778,9 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     }
     if (output != nil) {
       output.pts = pts;
-      [self pushFrame:output];
+      if (generation == videoGeneration) {
+        [self pushFrame:output];
+      }
     }
     if (!videoSizeReported) {
       videoSizeReported = YES;
@@ -982,6 +1788,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
     }
     av_frame_unref(frame);
   }
+  videoDecodeSeconds += CFAbsoluteTimeGetCurrent() - decodeStart;
 }
 
 - (XPVideoFrameData *)yuvFrameFromFrame:(AVFrame *)frame
@@ -1118,7 +1925,7 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
 
 - (void)decodeAudioPacket
 {
-  if (state->audio == NULL || state->resample == NULL) {
+  if (state == NULL || state->audio == NULL || state->resample == NULL) {
     return;
   }
   int sendResult = avcodec_send_packet(state->audio, state->packet);
@@ -1168,11 +1975,14 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
           double audioPTS = (audioTimestamp == AV_NOPTS_VALUE)
                           ? 0
                           : audioTimestamp * av_q2d(audioTimeBase);
+          [clockLock lock];
           if (!hasAudioStart) {
             hasAudioStart = YES;
             audioStartPTS = audioPTS;
+            audioOffset = 0;
             lastAudioClockAt = CFAbsoluteTimeGetCurrent();
           }
+          [clockLock unlock];
           if (audioPTS > latestPTS) {
             latestPTS = audioPTS;
           }
@@ -1187,13 +1997,118 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
 }
 
+- (void)decodeSubtitlePacket
+{
+  if (state == NULL || state->subtitle == NULL || state->packet == NULL) {
+    return;
+  }
+  AVSubtitle subtitle;
+  memset(&subtitle, 0, sizeof(subtitle));
+  int got = 0;
+  int result = avcodec_decode_subtitle2(state->subtitle, &subtitle, &got, state->packet);
+  if (result < 0 || got == 0) {
+    if (subtitlePacketCount <= 3) {
+      NSLog(@"[XuperPad] decodificador: subtitulos sin datos (%d)", result);
+    }
+    return;
+  }
+  double start = [self packetTime:state->packet streamIndex:state->subtitleIndex];
+  double display = (double)subtitle.start_display_time / 1000.0;
+  double finish = (double)subtitle.end_display_time / 1000.0;
+  double cueStart = start + display;
+  double cueEnd = cueStart + (finish - display);
+  if (finish <= display) {
+    cueEnd = cueStart + 3.0;
+  }
+  NSMutableArray *cues = [NSMutableArray array];
+  for (unsigned int index = 0; index < subtitle.num_rects; index++) {
+    AVSubtitleRect *rect = subtitle.rects[index];
+    if (rect == NULL) {
+      continue;
+    }
+    XPSubtitleCue *cue = [[XPSubtitleCue alloc] init];
+    cue.start = cueStart;
+    cue.end = cueEnd;
+    cue.x = rect->x;
+    cue.y = rect->y;
+    cue.width = rect->w;
+    cue.height = rect->h;
+    cue.videoWidth = state->video != NULL ? state->video->width : 0;
+    cue.videoHeight = state->video != NULL ? state->video->height : 0;
+    if (rect->type == SUBTITLE_TEXT && rect->text != NULL) {
+      cue.text = [NSString stringWithUTF8String:rect->text];
+    } else if (rect->type == SUBTITLE_ASS && rect->ass != NULL) {
+      cue.text = XPASSLineText(rect->ass);
+    } else if (rect->type == SUBTITLE_BITMAP && rect->data[1] != NULL && rect->data[0] != NULL) {
+      cue.rgba = [self rgbaFromSubtitleRect:rect];
+    }
+    if (cue.text.length > 0 || cue.rgba != nil) {
+      [cues addObject:cue];
+    }
+  }
+  avsubtitle_free(&subtitle);
+  if (cues.count == 0) {
+    return;
+  }
+  [subtitleLock lock];
+  [subtitleCues addObjectsFromArray:cues];
+  while (subtitleCues.count > 64) {
+    [subtitleCues removeObjectAtIndex:0];
+  }
+  [subtitleLock unlock];
+  NSLog(@"[XuperPad] decodificador: subtitulo con %lu textos entre %.2f y %.2f",
+        (unsigned long)cues.count, cueStart, cueEnd);
+}
+
+- (NSData *)rgbaFromSubtitleRect:(AVSubtitleRect *)rect
+{
+  if (rect->w <= 0 || rect->h <= 0 || rect->data[1] == NULL || rect->data[0] == NULL) {
+    return nil;
+  }
+  int colors = rect->nb_colors > 0 ? rect->nb_colors : 16;
+  const uint8_t *palette = rect->data[0];
+  const uint8_t *indices = rect->data[1];
+  int stride = rect->linesize[1];
+  if (stride <= 0) {
+    stride = rect->w;
+  }
+  NSMutableData *result = [NSMutableData dataWithLength:
+                           (NSUInteger)((size_t)rect->w * (size_t)rect->h * 4)];
+  if (result == nil) {
+    return nil;
+  }
+  uint8_t *target = (uint8_t *)result.mutableBytes;
+  for (int row = 0; row < rect->h; row++) {
+    const uint8_t *line = indices + (size_t)row * (size_t)stride;
+    for (int column = 0; column < rect->w; column++) {
+      int index = line[column];
+      uint8_t *pixel = target + ((size_t)row * (size_t)rect->w + (size_t)column) * 4;
+      if (index > 0 && index < colors) {
+        const uint8_t *entry = palette + (size_t)index * 4;
+        pixel[0] = entry[0];
+        pixel[1] = entry[1];
+        pixel[2] = entry[2];
+        pixel[3] = entry[3];
+      } else {
+        pixel[0] = 0;
+        pixel[1] = 0;
+        pixel[2] = 0;
+        pixel[3] = 0;
+      }
+    }
+  }
+  return result;
+}
+
 - (void)pushFrame:(XPVideoFrameData *)frame
 {
+  [clockLock lock];
   if (!hasVideoStart) {
     hasVideoStart = YES;
     videoStartPTS = frame.pts;
     videoWall = CFAbsoluteTimeGetCurrent();
   }
+  [clockLock unlock];
   [frameCondition lock];
   [frames addObject:frame];
   while (frames.count > XPVideoQueueLimit) {
@@ -1213,6 +2128,58 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
       [delegate decoder:self didOpenVideoWithWidth:width height:height];
     }
   });
+}
+
+- (void)reportTracks
+{
+  NSArray *audios = [audioTracks copy];
+  NSArray *subtitles = [subtitleTracks copy];
+  NSInteger audioIndex = selectedAudioIndex;
+  NSInteger subtitleIndex = selectedSubtitleIndex;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id<XPDecoderDelegate> delegate = self.delegate;
+    if (delegate == nil) {
+      return;
+    }
+    if ([delegate respondsToSelector:@selector(decoder:didUpdateAudioTracks:selectedIndex:)]) {
+      [delegate decoder:self didUpdateAudioTracks:audios selectedIndex:audioIndex];
+    }
+    if ([delegate respondsToSelector:@selector(decoder:didUpdateSubtitleTracks:selectedIndex:)]) {
+      [delegate decoder:self didUpdateSubtitleTracks:subtitles selectedIndex:subtitleIndex];
+    }
+  });
+}
+
+- (void)rebuildInformationText
+{
+  if (state == NULL || state->format == NULL) {
+    informationText = @"";
+    return;
+  }
+  NSMutableString *text = [NSMutableString string];
+  if (state->video != NULL) {
+    AVCodecDescriptor *descriptor = avcodec_descriptor_get(state->video->codec_id);
+    NSString *name = descriptor != NULL && descriptor->name != NULL
+                       ? [NSString stringWithUTF8String:descriptor->name]
+                       : @"video";
+    [text appendFormat:@"%@ %dx%d", name.uppercaseString, state->video->width, state->video->height];
+    if (state->video->bit_rate > 0) {
+      [text appendFormat:@" · %.1f Mbps", (double)state->video->bit_rate / 1000000.0];
+    }
+  }
+  if (state->audio != NULL) {
+    AVCodecDescriptor *descriptor = avcodec_descriptor_get(state->audio->codec_id);
+    NSString *name = descriptor != NULL && descriptor->name != NULL
+                       ? [NSString stringWithUTF8String:descriptor->name]
+                       : @"audio";
+    [text appendFormat:@" · %@ %d Hz %d canales",
+      name.uppercaseString, state->audio->sample_rate, state->audio->channels];
+  }
+  [text appendFormat:@" · %lu pistas de audio", (unsigned long)audioTracks.count];
+  if (subtitleTracks.count > 0) {
+    [text appendFormat:@" · %lu pistas de subtitulos", (unsigned long)subtitleTracks.count];
+  }
+  informationText = [text copy];
 }
 
 - (void)setFailureDetail:(NSString *)detail
@@ -1262,6 +2229,15 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
   [frameCondition unlock];
 
+  [videoCondition lock];
+  for (XPQueuedPacket *item in videoPackets) {
+    if (item.packet != NULL) {
+      av_packet_free(&item.packet);
+    }
+  }
+  [videoPackets removeAllObjects];
+  [videoCondition unlock];
+
   if (state == NULL) {
     return;
   }
@@ -1270,6 +2246,9 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   }
   if (state->frame != NULL) {
     av_frame_free(&state->frame);
+  }
+  if (state->videoFrame != NULL) {
+    av_frame_free(&state->videoFrame);
   }
   if (state->scale != NULL) {
     sws_freeContext(state->scale);
@@ -1286,6 +2265,10 @@ static void XPFFmpegLogCallback(void *context, int level, const char *format, va
   if (state->audio != NULL) {
     avcodec_free_context(&state->audio);
     state->audio = NULL;
+  }
+  if (state->subtitle != NULL) {
+    avcodec_free_context(&state->subtitle);
+    state->subtitle = NULL;
   }
   if (state->rgb != NULL) {
     av_free(state->rgb);

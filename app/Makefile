@@ -42,6 +42,8 @@ XuperPad_FILES = main.m \
 	Classes/XPDecoder.m \
 	Classes/XPGLView.m \
 	Classes/XPAudioOutput.m \
+	Classes/XPOptionsPanel.m \
+	Classes/XPSubtitleOverlay.m \
 	Classes/XPAppDelegate.m
 
 XuperPad_FRAMEWORKS = UIKit Foundation CoreGraphics AVFoundation AVKit AudioToolbox OpenGLES QuartzCore

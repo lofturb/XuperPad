@@ -119,6 +119,23 @@
       [XPRoundedPath(bar, unit * 0.9f) fill];
       break;
     }
+    case XPPlayerControlIconChapters: {
+      for (int index = 0; index < 3; index++) {
+        CGFloat rowY = midY - unit * 5.0f + (CGFloat)index * unit * 5.0f;
+        UIBezierPath *dot = [UIBezierPath bezierPathWithOvalInRect:
+                              CGRectMake(midX - unit * 7.0f,
+                                         rowY - unit * 1.1f,
+                                         unit * 2.2f,
+                                         unit * 2.2f)];
+        [dot fill];
+        CGRect line = CGRectMake(midX - unit * 3.5f,
+                                 rowY - unit * 0.7f,
+                                 unit * 10.5f,
+                                 unit * 1.4f);
+        [XPRoundedPath(line, unit * 0.7f) fill];
+      }
+      break;
+    }
     case XPPlayerControlIconMore: {
       for (int index = 0; index < 3; index++) {
         CGFloat centerX = midX + (CGFloat)(index - 1) * unit * 5.0f;
@@ -273,6 +290,7 @@ static NSString *XPPlayerClockText(double seconds)
 @property (nonatomic, strong) XPPlayerIconButton *previousButton;
 @property (nonatomic, strong) XPPlayerIconButton *playButton;
 @property (nonatomic, strong) XPPlayerIconButton *nextButton;
+@property (nonatomic, strong) XPPlayerIconButton *chaptersButton;
 @property (nonatomic, strong) XPPlayerIconButton *moreButton;
 @end
 
@@ -367,6 +385,14 @@ static NSString *XPPlayerClockText(double seconds)
                forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:self.nextButton];
 
+    self.chaptersButton = [[XPPlayerIconButton alloc] initWithFrame:CGRectZero];
+    self.chaptersButton.icon = XPPlayerControlIconChapters;
+    self.chaptersButton.accessibilityLabel = @"Capítulos";
+    [self.chaptersButton addTarget:self
+                            action:@selector(chaptersTapped:)
+                  forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:self.chaptersButton];
+
     self.moreButton = [[XPPlayerIconButton alloc] initWithFrame:CGRectZero];
     self.moreButton.icon = XPPlayerControlIconMore;
     self.moreButton.accessibilityLabel = @"Más opciones";
@@ -455,6 +481,7 @@ static NSString *XPPlayerClockText(double seconds)
   self.previousButton.frame = CGRectMake(margin, rowY, 38.0f, 38.0f);
   self.playButton.frame = CGRectMake(margin + 48.0f, rowY - 3.0f, 44.0f, 44.0f);
   self.nextButton.frame = CGRectMake(margin + 102.0f, rowY, 38.0f, 38.0f);
+  self.chaptersButton.frame = CGRectMake(width - margin - 86.0f, rowY, 38.0f, 38.0f);
   self.moreButton.frame = CGRectMake(width - margin - 38.0f, rowY, 38.0f, 38.0f);
 }
 
@@ -519,6 +546,13 @@ static NSString *XPPlayerClockText(double seconds)
 {
   if (self.nextChapterHandler != nil) {
     self.nextChapterHandler();
+  }
+}
+
+- (void)chaptersTapped:(id)sender
+{
+  if (self.chaptersHandler != nil) {
+    self.chaptersHandler();
   }
 }
 

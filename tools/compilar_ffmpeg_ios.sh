@@ -332,7 +332,7 @@ FF_ARGS=(
   --enable-network
   --enable-protocol=file,tcp,tls,http,https
   --enable-demuxer=mpegts
-  --enable-decoder=hevc,aac
+  --enable-decoder=hevc,aac,dvbsub
   --enable-parser=hevc,aac
   --enable-mbedtls
   --enable-version3

@@ -5,6 +5,7 @@ typedef NS_ENUM(NSInteger, XPPlayerControlIcon) {
   XPPlayerControlIconPlay,
   XPPlayerControlIconPause,
   XPPlayerControlIconNextChapter,
+  XPPlayerControlIconChapters,
   XPPlayerControlIconMore
 };
 
@@ -22,6 +23,7 @@ typedef NS_ENUM(NSInteger, XPPlayerControlIcon) {
 @property (nonatomic, copy) void (^playPauseHandler)(void);
 @property (nonatomic, copy) void (^previousChapterHandler)(void);
 @property (nonatomic, copy) void (^nextChapterHandler)(void);
+@property (nonatomic, copy) void (^chaptersHandler)(void);
 @property (nonatomic, copy) void (^moreHandler)(void);
 @property (nonatomic, copy) void (^seekHandler)(float fraction);
 

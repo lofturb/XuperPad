@@ -12,6 +12,8 @@
 #import "XPStatusView.h"
 #import "XPStreamResolver.h"
 #import "XPChapterBar.h"
+#import "XPOptionsPanel.h"
+#import "XPSubtitleOverlay.h"
 #import "XPPlayerControls.h"
 #import "XPTheme.h"
 
@@ -20,8 +22,10 @@
 static const NSTimeInterval XPPlayerStartTimeout = 45.0;
 static const NSTimeInterval XPPlayerControlsTimeout = 3.5;
 static const NSTimeInterval XPPlayerRefreshInterval = 0.5;
+static const NSTimeInterval XPPlayerSubtitleInterval = 0.2;
 static const NSTimeInterval XPPlayerToastTimeout = 2.4;
 static const CGFloat XPPlayerChapterBarHeight = 84.0f;
+static const CGFloat XPPlayerOptionsHeight = 226.0f;
 static const double XPPlayerChapterRestartLimit = 8.0;
 
 @interface XPPlayerViewController () <XPDecoderDelegate, UIGestureRecognizerDelegate>
@@ -31,6 +35,8 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 @property (nonatomic, strong) XPDecoder *decoder;
 @property (nonatomic, strong) XPPlayerControls *controls;
 @property (nonatomic, strong) XPChapterBar *chapterBar;
+@property (nonatomic, strong) XPOptionsPanel *optionsPanel;
+@property (nonatomic, strong) XPSubtitleOverlay *subtitleOverlay;
 @property (nonatomic, strong) XPStatusView *statusView;
 @property (nonatomic, strong) UILabel *toastLabel;
 @property (nonatomic, assign) NSUInteger currentIndex;
@@ -38,9 +44,12 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 @property (nonatomic, assign) BOOL observing;
 @property (nonatomic, strong) NSTimer *startTimeout;
 @property (nonatomic, strong) NSTimer *refreshTimer;
+@property (nonatomic, strong) NSTimer *subtitleTimer;
 @property (nonatomic, strong) NSTimer *toastTimer;
 @property (nonatomic, assign) BOOL userPaused;
 @property (nonatomic, assign) BOOL chapterBarVisible;
+@property (nonatomic, assign) BOOL optionsPanelVisible;
+@property (nonatomic, assign) float playbackRate;
 @property (nonatomic, strong) NSDate *lastInteraction;
 @end
 
@@ -97,6 +106,28 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   };
   [self.view addSubview:self.chapterBar];
 
+  self.subtitleOverlay = [[XPSubtitleOverlay alloc] initWithFrame:self.view.bounds];
+  [self.view addSubview:self.subtitleOverlay];
+
+  self.optionsPanel = [[XPOptionsPanel alloc] initWithFrame:CGRectZero];
+  self.optionsPanel.alpha = 0.0f;
+  self.optionsPanel.hidden = YES;
+  self.playbackRate = 1.0f;
+  self.optionsPanel.playbackRate = 1.0f;
+  self.optionsPanel.audioSelectionHandler = ^(NSInteger index) {
+    [weakSelf audioTrackSelectedAtIndex:index];
+  };
+  self.optionsPanel.subtitleSelectionHandler = ^(NSInteger index) {
+    [weakSelf subtitleTrackSelectedAtIndex:index];
+  };
+  self.optionsPanel.rateSelectionHandler = ^(float rate) {
+    [weakSelf playbackRateSelected:rate];
+  };
+  self.optionsPanel.closeHandler = ^{
+    [weakSelf setOptionsPanelVisible:NO];
+  };
+  [self.view addSubview:self.optionsPanel];
+
   self.controls = [[XPPlayerControls alloc] initWithFrame:self.view.bounds];
   self.controls.liveStream = self.chapters.count == 0;
   self.controls.closeHandler = ^{
@@ -111,8 +142,11 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   self.controls.nextChapterHandler = ^{
     [weakSelf nextChapterTapped];
   };
-  self.controls.moreHandler = ^{
+  self.controls.chaptersHandler = ^{
     [weakSelf toggleChapterBar];
+  };
+  self.controls.moreHandler = ^{
+    [weakSelf toggleOptionsPanel];
   };
   self.controls.seekHandler = ^(float fraction) {
     [weakSelf seekToFraction:fraction];
@@ -137,6 +171,12 @@ static const double XPPlayerChapterRestartLimit = 8.0;
                                                       selector:@selector(refreshInterface)
                                                       userInfo:nil
                                                        repeats:YES];
+
+  self.subtitleTimer = [NSTimer scheduledTimerWithTimeInterval:XPPlayerSubtitleInterval
+                                                         target:self
+                                                       selector:@selector(refreshSubtitle)
+                                                       userInfo:nil
+                                                        repeats:YES];
 }
 
 - (NSMutableArray *)buildAddressQueue
@@ -183,6 +223,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   self.glView.frame = self.view.bounds;
   self.statusView.frame = self.view.bounds;
   self.controls.frame = self.view.bounds;
+  self.subtitleOverlay.frame = self.view.bounds;
 
   CGFloat barBottom = height - 92.0f;
   CGFloat barTop = barBottom - XPPlayerChapterBarHeight;
@@ -191,6 +232,15 @@ static const double XPPlayerChapterRestartLimit = 8.0;
     barBottom = barTop + XPPlayerChapterBarHeight;
   }
   self.chapterBar.frame = CGRectMake(0.0f, barTop, width, XPPlayerChapterBarHeight);
+
+  CGFloat panelBottom = height - 96.0f;
+  CGFloat panelTop = panelBottom - XPPlayerOptionsHeight;
+  if (panelTop < 40.0f) {
+    panelTop = 40.0f;
+    panelBottom = MIN(height - 96.0f, panelTop + XPPlayerOptionsHeight);
+  }
+  self.optionsPanel.frame = CGRectMake(0.0f, panelTop, width, panelBottom - panelTop);
+
   self.toastLabel.frame = CGRectMake((width - 280.0f) / 2.0f,
                                      barTop - 44.0f,
                                      280.0f,
@@ -304,6 +354,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 {
   XPDecoder *decoder = [[XPDecoder alloc] init];
   decoder.delegate = self;
+  decoder.playbackRate = self.playbackRate;
   CGSize target = self.view.bounds.size;
   if (target.width > 1.0 && target.height > 1.0) {
     decoder.presentationSize = target;
@@ -359,6 +410,11 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   }
   self.playerLayer.player = nil;
   [self.glView clearFrame];
+  [self.subtitleOverlay clearCue];
+  self.optionsPanel.audioTracks = @[];
+  self.optionsPanel.subtitleTracks = @[];
+  self.optionsPanel.selectedAudioIndex = -1;
+  self.optionsPanel.selectedSubtitleIndex = -1;
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -608,7 +664,8 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   self.controls.progress = MAX(0.0f, MIN(1.0f, progress));
   self.controls.playing = !self.userPaused;
 
-  if (!self.controls.hidden && !self.chapterBarVisible && self.lastInteraction != nil) {
+  if (!self.controls.hidden && !self.chapterBarVisible && !self.optionsPanelVisible
+      && self.lastInteraction != nil) {
     NSTimeInterval idle = [[NSDate date] timeIntervalSinceDate:self.lastInteraction];
     if (idle > XPPlayerControlsTimeout) {
       [self hideControls];
@@ -630,7 +687,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 
 - (void)hideControls
 {
-  if (self.chapterBarVisible) {
+  if (self.chapterBarVisible || self.optionsPanelVisible) {
     return;
   }
   [UIView animateWithDuration:0.25 animations:^{
@@ -646,6 +703,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 {
   if (!self.controls.hidden) {
     [self setChapterBarVisible:NO];
+    [self setOptionsPanelVisible:NO];
     [UIView animateWithDuration:0.25 animations:^{
       self.controls.alpha = 0.0f;
     } completion:^(BOOL finished) {
@@ -665,8 +723,37 @@ static const double XPPlayerChapterRestartLimit = 8.0;
     [self showControls];
     return;
   }
+  [self setOptionsPanelVisible:NO];
   [self setChapterBarVisible:!self.chapterBarVisible];
   [self showControls];
+}
+
+- (void)toggleOptionsPanel
+{
+  [self setChapterBarVisible:NO];
+  [self setOptionsPanelVisible:!self.optionsPanelVisible];
+  [self showControls];
+}
+
+- (void)setOptionsPanelVisible:(BOOL)visible
+{
+  _optionsPanelVisible = visible;
+  if (visible) {
+    self.optionsPanel.hidden = NO;
+    [self.view bringSubviewToFront:self.optionsPanel];
+    [self.view bringSubviewToFront:self.controls];
+    [UIView animateWithDuration:0.2 animations:^{
+      self.optionsPanel.alpha = 1.0f;
+    }];
+    return;
+  }
+  [UIView animateWithDuration:0.2 animations:^{
+    self.optionsPanel.alpha = 0.0f;
+  } completion:^(BOOL finished) {
+    if (finished) {
+      self.optionsPanel.hidden = YES;
+    }
+  }];
 }
 
 - (void)setChapterBarVisible:(BOOL)visible
@@ -674,6 +761,8 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   _chapterBarVisible = visible;
   if (visible) {
     self.chapterBar.hidden = NO;
+    [self.view bringSubviewToFront:self.chapterBar];
+    [self.view bringSubviewToFront:self.controls];
     [UIView animateWithDuration:0.2 animations:^{
       self.chapterBar.alpha = 1.0f;
     }];
@@ -686,6 +775,64 @@ static const double XPPlayerChapterRestartLimit = 8.0;
       self.chapterBar.hidden = YES;
     }
   }];
+}
+
+- (void)audioTrackSelectedAtIndex:(NSInteger)index
+{
+  if (self.decoder == nil) {
+    [self showTransientMessage:@"Esta reproducción no permite cambiar el idioma del audio"];
+    return;
+  }
+  if (![self.decoder selectAudioTrack:index]) {
+    [self showTransientMessage:@"No se pudo cambiar el idioma del audio"];
+    return;
+  }
+  self.optionsPanel.selectedAudioIndex = index;
+  [self showTransientMessage:@"Cambiando el idioma del audio"];
+}
+
+- (void)subtitleTrackSelectedAtIndex:(NSInteger)index
+{
+  if (self.decoder == nil) {
+    [self showTransientMessage:@"Esta reproducción no permite cambiar los subtítulos"];
+    return;
+  }
+  if (![self.decoder selectSubtitleTrack:index]) {
+    [self showTransientMessage:@"No se pudieron cambiar los subtítulos"];
+    return;
+  }
+  self.optionsPanel.selectedSubtitleIndex = index;
+  if (index < 0) {
+    [self.subtitleOverlay clearCue];
+    [self showTransientMessage:@"Subtítulos desactivados"];
+  } else {
+    [self showTransientMessage:@"Subtítulos activados"];
+  }
+}
+
+- (void)playbackRateSelected:(float)rate
+{
+  self.playbackRate = rate;
+  self.optionsPanel.playbackRate = rate;
+  if (self.decoder != nil) {
+    self.decoder.playbackRate = rate;
+  } else if (self.player != nil) {
+    self.player.rate = rate;
+  }
+  [self showTransientMessage:[NSString stringWithFormat:@"Velocidad %.2gx", rate]];
+}
+
+- (void)refreshSubtitle
+{
+  if (self.decoder == nil) {
+    return;
+  }
+  XPSubtitleCue *cue = self.decoder.activeSubtitle;
+  if (cue == nil) {
+    [self.subtitleOverlay clearCue];
+    return;
+  }
+  [self.subtitleOverlay showCue:cue];
 }
 
 - (void)showTransientMessage:(NSString *)message
@@ -734,6 +881,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   }
   if ([view isDescendantOfView:self.controls] ||
       [view isDescendantOfView:self.chapterBar] ||
+      [view isDescendantOfView:self.optionsPanel] ||
       [view isDescendantOfView:self.statusView]) {
     return NO;
   }
@@ -758,6 +906,25 @@ static const double XPPlayerChapterRestartLimit = 8.0;
   [self.glView displayFrame:frame];
 }
 
+- (void)decoder:(XPDecoder *)decoder didUpdateAudioTracks:(NSArray *)tracks selectedIndex:(NSInteger)selectedIndex
+{
+  if (decoder != self.decoder) {
+    return;
+  }
+  self.optionsPanel.audioTracks = tracks ?: @[];
+  self.optionsPanel.selectedAudioIndex = selectedIndex;
+  self.optionsPanel.informationText = decoder.informationText;
+}
+
+- (void)decoder:(XPDecoder *)decoder didUpdateSubtitleTracks:(NSArray *)tracks selectedIndex:(NSInteger)selectedIndex
+{
+  if (decoder != self.decoder) {
+    return;
+  }
+  self.optionsPanel.subtitleTracks = tracks ?: @[];
+  self.optionsPanel.selectedSubtitleIndex = selectedIndex;
+}
+
 - (void)decoder:(XPDecoder *)decoder didFailWithMessage:(NSString *)message
 {
   if (decoder != self.decoder) {
@@ -779,6 +946,7 @@ static const double XPPlayerChapterRestartLimit = 8.0;
 - (void)dealloc
 {
   [self.refreshTimer invalidate];
+  [self.subtitleTimer invalidate];
   [self.toastTimer invalidate];
   [self.startTimeout invalidate];
   [self stopPlayback];

@@ -5,8 +5,8 @@
 #import <stdlib.h>
 #import <string.h>
 
-static const int XPAudioBufferFrames = 1024;
-static const int XPAudioBufferCount = 16;
+static const int XPAudioBufferFrames = 2048;
+static const int XPAudioBufferCount = 32;
 
 @interface XPAudioOutput () {
   AudioQueueRef queue;
@@ -29,6 +29,8 @@ static const int XPAudioBufferCount = 16;
 - (AudioQueueBufferRef)takeFreeBuffer;
 - (void)returnBuffer:(AudioQueueBufferRef)buffer queue:(AudioQueueRef)audioQueue;
 - (void)startQueueIfNeeded;
+- (BOOL)createQueueWithSampleRate:(int)sampleRate channels:(int)channels;
+- (void)disposeQueue;
 
 @end
 
@@ -98,6 +100,17 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
         (float)session.outputVolume,
         routeNames);
 
+  return [self createQueueWithSampleRate:sampleRate channels:channels];
+}
+
+- (BOOL)createQueueWithSampleRate:(int)sampleRate channels:(int)channels
+{
+  if (sampleRate <= 0 || channels <= 0) {
+    return NO;
+  }
+  rate = sampleRate;
+  channelCount = channels;
+
   memset(&format, 0, sizeof(format));
   format.mSampleRate = sampleRate;
   format.mFormatID = kAudioFormatLinearPCM;
@@ -148,9 +161,47 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     return NO;
   }
   active = YES;
-  NSLog(@"[XuperPad] audio: cola creada con %lu buffers de %d tramas",
-        (unsigned long)freeBuffers.count, XPAudioBufferFrames);
+  NSLog(@"[XuperPad] audio: cola creada con %lu buffers de %d tramas a %d Hz",
+        (unsigned long)freeBuffers.count, XPAudioBufferFrames, sampleRate);
   return YES;
+}
+
+- (void)disposeQueue
+{
+  AudioQueueRef current = NULL;
+  [queueLock lock];
+  current = queue;
+  queue = NULL;
+  [queueLock unlock];
+
+  [stateCondition lock];
+  active = NO;
+  [freeBuffers removeAllObjects];
+  [stateCondition broadcast];
+  [stateCondition unlock];
+
+  if (current != NULL) {
+    AudioQueueStop(current, true);
+    AudioQueueDispose(current, true);
+  }
+
+  [stateCondition lock];
+  started = NO;
+  samplesAccepted = 0;
+  samplesPlayed = 0;
+  callbacks = 0;
+  meterPeak = 0;
+  meterAverage = 0;
+  [stateCondition unlock];
+}
+
+- (BOOL)resetWithSampleRate:(int)sampleRate channels:(int)channels
+{
+  if (sampleRate <= 0 || channels <= 0) {
+    return NO;
+  }
+  [self disposeQueue];
+  return [self createQueueWithSampleRate:sampleRate channels:channels];
 }
 
 - (void)setPaused:(BOOL)paused
@@ -364,27 +415,7 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     return;
   }
 
-  [queueLock lock];
-  AudioQueueStop(queue, true);
-
-  [stateCondition lock];
-  active = NO;
-  [freeBuffers removeAllObjects];
-  [stateCondition broadcast];
-  [stateCondition unlock];
-
-  AudioQueueDispose(queue, true);
-  queue = NULL;
-  [queueLock unlock];
-
-  [stateCondition lock];
-  started = NO;
-  samplesAccepted = 0;
-  samplesPlayed = 0;
-  callbacks = 0;
-  meterPeak = 0;
-  meterAverage = 0;
-  [stateCondition unlock];
+  [self disposeQueue];
 
   NSError *sessionError = nil;
   [[AVAudioSession sharedInstance] setActive:NO
