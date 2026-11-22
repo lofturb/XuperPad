@@ -140,7 +140,7 @@ typedef struct {
   NSInteger pendingSubtitleIndex;
   BOOL hasPendingRate;
   float pendingRate;
-  float playbackRate;
+  float currentRate;
   NSMutableArray *subtitleCues;
   NSLock *subtitleLock;
   NSString *informationText;
@@ -266,11 +266,11 @@ static NSString *XPDictionaryValue(AVDictionary *dictionary, NSString *key)
   if (dictionary == NULL || key.length == 0) {
     return nil;
   }
-  const char *value = av_dict_get(dictionary, [key UTF8String], NULL, 0);
-  if (value == NULL) {
+  AVDictionaryEntry *entry = av_dict_get(dictionary, [key UTF8String], NULL, 0);
+  if (entry == NULL || entry->value == NULL) {
     return nil;
   }
-  return [NSString stringWithUTF8String:value];
+  return [NSString stringWithUTF8String:entry->value];
 }
 
 static NSString *XPLanguageName(NSString *code)
@@ -432,7 +432,7 @@ static NSString *XPASSLineText(const char *ass)
     pendingSubtitleIndex = -1;
     hasPendingRate = NO;
     pendingRate = 1.0f;
-    playbackRate = 1.0f;
+    currentRate = 1.0f;
     informationText = @"";
     outputSampleRate = 0;
   }
@@ -565,8 +565,7 @@ static NSString *XPASSLineText(const char *ass)
   hasPendingSubtitleSelection = NO;
   pendingSubtitleIndex = -1;
   hasPendingRate = NO;
-  pendingRate = 1.0f;
-  playbackRate = 1.0f;
+  currentRate = pendingRate > 0.0f ? pendingRate : 1.0f;
   informationText = @"";
   outputSampleRate = 0;
   running = YES;
@@ -833,8 +832,9 @@ static NSString *XPASSLineText(const char *ass)
   while (videoPackets.count > XPVideoPacketLimit) {
     XPQueuedPacket *dropped = [videoPackets firstObject];
     [videoPackets removeObjectAtIndex:0];
-    if (dropped.packet != NULL) {
-      av_packet_free(&dropped.packet);
+    AVPacket *droppedPacket = dropped.packet;
+    if (droppedPacket != NULL) {
+      av_packet_free(&droppedPacket);
     }
   }
   [videoCondition broadcast];
@@ -958,7 +958,7 @@ static NSString *XPASSLineText(const char *ass)
   BOOL audioReady = hasAudioStart && audioOutput != nil && audioClockHealthy;
   double start = audioReady ? audioStartPTS : 0.0;
   double offset = audioOffset;
-  double rate = (double)playbackRate;
+  double rate = (double)currentRate;
   BOOL videoReady = hasVideoStart;
   double videoStart = videoStartPTS;
   double wall = videoWall;
@@ -1075,6 +1075,14 @@ static NSString *XPASSLineText(const char *ass)
   [clockLock unlock];
 }
 
+- (float)playbackRate
+{
+  [clockLock lock];
+  float rate = currentRate;
+  [clockLock unlock];
+  return rate;
+}
+
 - (void)applyPendingSelections
 {
   [clockLock lock];
@@ -1125,7 +1133,7 @@ static NSString *XPASSLineText(const char *ass)
 {
   if (state == NULL || state->audio == NULL || state->resample == NULL) {
     [clockLock lock];
-    playbackRate = rate;
+    currentRate = rate;
     [clockLock unlock];
     return;
   }
@@ -1160,7 +1168,7 @@ static NSString *XPASSLineText(const char *ass)
   state->resample = resample;
   [self resetAudioOutputWithRate:targetRate];
   [clockLock lock];
-  playbackRate = rate;
+  currentRate = rate;
   [clockLock unlock];
   NSLog(@"[XuperPad] decodificador: velocidad %.2fx con salida %d Hz", rate, targetRate);
   [self reportTracks];
@@ -1218,8 +1226,9 @@ static NSString *XPASSLineText(const char *ass)
   videoGeneration++;
   [videoCondition lock];
   for (XPQueuedPacket *item in videoPackets) {
-    if (item.packet != NULL) {
-      av_packet_free(&item.packet);
+    AVPacket *queuedPacket = item.packet;
+    if (queuedPacket != NULL) {
+      av_packet_free(&queuedPacket);
     }
   }
   [videoPackets removeAllObjects];
@@ -1513,7 +1522,7 @@ static NSString *XPASSLineText(const char *ass)
   track.languageName = XPLanguageName(track.languageCode);
   NSString *title = XPDictionaryValue(stream->metadata, @"title");
   track.title = title.length > 0 ? title : @"";
-  AVCodecDescriptor *descriptor = avcodec_descriptor_get(stream->codecpar->codec_id);
+  const AVCodecDescriptor *descriptor = avcodec_descriptor_get(stream->codecpar->codec_id);
   if (descriptor != NULL && descriptor->name != NULL) {
     track.codecName = [NSString stringWithUTF8String:descriptor->name];
   } else {
@@ -1587,7 +1596,7 @@ static NSString *XPASSLineText(const char *ass)
     return;
   }
   [clockLock lock];
-  float rate = playbackRate;
+  float rate = currentRate;
   [clockLock unlock];
   int sourceRate = audioContext->sample_rate > 0 ? audioContext->sample_rate : 44100;
   int outputRate = (int)((double)sourceRate * (double)rate);
@@ -2158,7 +2167,7 @@ static NSString *XPASSLineText(const char *ass)
   }
   NSMutableString *text = [NSMutableString string];
   if (state->video != NULL) {
-    AVCodecDescriptor *descriptor = avcodec_descriptor_get(state->video->codec_id);
+    const AVCodecDescriptor *descriptor = avcodec_descriptor_get(state->video->codec_id);
     NSString *name = descriptor != NULL && descriptor->name != NULL
                        ? [NSString stringWithUTF8String:descriptor->name]
                        : @"video";
@@ -2168,7 +2177,7 @@ static NSString *XPASSLineText(const char *ass)
     }
   }
   if (state->audio != NULL) {
-    AVCodecDescriptor *descriptor = avcodec_descriptor_get(state->audio->codec_id);
+    const AVCodecDescriptor *descriptor = avcodec_descriptor_get(state->audio->codec_id);
     NSString *name = descriptor != NULL && descriptor->name != NULL
                        ? [NSString stringWithUTF8String:descriptor->name]
                        : @"audio";
@@ -2231,8 +2240,9 @@ static NSString *XPASSLineText(const char *ass)
 
   [videoCondition lock];
   for (XPQueuedPacket *item in videoPackets) {
-    if (item.packet != NULL) {
-      av_packet_free(&item.packet);
+    AVPacket *queuedPacket = item.packet;
+    if (queuedPacket != NULL) {
+      av_packet_free(&queuedPacket);
     }
   }
   [videoPackets removeAllObjects];
