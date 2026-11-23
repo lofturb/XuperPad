@@ -114,6 +114,13 @@ typedef struct {
   NSUInteger videoSendErrorCount;
   NSUInteger videoReferenceErrorCount;
   NSUInteger videoKeyframeWaitCount;
+  NSUInteger pictICount;
+  NSUInteger pictPCount;
+  NSUInteger pictBCount;
+  NSUInteger pictOtherCount;
+  double lastDeliverWall;
+  double maxDeliverGap;
+  NSUInteger bigDeliverGapCount;
   CFAbsoluteTime videoKeyframeWaitSince;
   BOOL videoNeedsKeyframe;
   double lastAudioClock;
@@ -433,6 +440,13 @@ lastCopySeconds = 0;
     videoSendErrorCount = 0;
     videoReferenceErrorCount = 0;
     videoKeyframeWaitCount = 0;
+    pictICount = 0;
+    pictPCount = 0;
+    pictBCount = 0;
+    pictOtherCount = 0;
+    lastDeliverWall = 0;
+    maxDeliverGap = 0;
+    bigDeliverGapCount = 0;
     videoKeyframeWaitSince = 0;
     lastAudioClock = 0;
     lastAudioClockAt = 0;
@@ -549,6 +563,13 @@ lastCopySeconds = 0;
   audioOffset = 0;
   videoWall = 0;
   failureDetail = nil;
+  pictICount = 0;
+  pictPCount = 0;
+  pictBCount = 0;
+  pictOtherCount = 0;
+  lastDeliverWall = 0;
+  maxDeliverGap = 0;
+  bigDeliverGapCount = 0;
   videoPacketCount = 0;
   audioPacketCount = 0;
   subtitlePacketCount = 0;
@@ -741,7 +762,7 @@ lastCopySeconds = 0;
           if (pcmSampleCount > 0) {
             rms = sqrt((double)pcmSquareSum / (double)pcmSampleCount);
           }
-          NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu subtitulos %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs copia %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu paquetes %lu retraso %.2fs sonido %.1fs en cola %.1fs libres %lu llamadas %lu pico %d rms %d medidor %.1f/%.1f memoria %.1f MB directo %d pista %ld refs %lu envios %lu esperas %lu",
+          NSLog(@"[XuperPad] decodificador: progreso video %lu audio %lu subtitulos %lu fotogramas %lu imagenes %.2f/s red %.1f kB/s lectura %.2fs video %.2fs escala %.2fs copia %.2fs audio %.2fs leidos %.1f MB lectura maxima %.2fs cola %lu paquetes %lu retraso %.2fs sonido %.1fs en cola %.1fs libres %lu llamadas %lu pico %d rms %d medidor %.1f/%.1f memoria %.1f MB directo %d pista %ld refs %lu envios %lu esperas %lu tipos I %lu P %lu B %lu otros %lu hueco %.3fs huecos %lu",
                 (unsigned long)videoPacketCount,
                 (unsigned long)audioPacketCount,
                 (unsigned long)subtitlePacketCount,
@@ -771,7 +792,15 @@ lastCopySeconds = 0;
                 (long)state->audioIndex,
                 (unsigned long)videoReferenceErrorCount,
                 (unsigned long)videoSendErrorCount,
-                (unsigned long)videoKeyframeWaitCount);
+                (unsigned long)videoKeyframeWaitCount,
+                (unsigned long)pictICount,
+                (unsigned long)pictPCount,
+                (unsigned long)pictBCount,
+                (unsigned long)pictOtherCount,
+                maxDeliverGap,
+                (unsigned long)bigDeliverGapCount);
+          maxDeliverGap = 0;
+          bigDeliverGapCount = 0;
           lastProgressAt = now;
           lastBytesRead = bytesRead;
           lastFrameCount = frameCount;
@@ -1045,6 +1074,18 @@ lastCopySeconds = 0;
   if (frame == nil) {
     return;
   }
+  double deliverWall = CFAbsoluteTimeGetCurrent();
+  if (lastDeliverWall > 0) {
+    double gap = deliverWall - lastDeliverWall;
+    if (gap > maxDeliverGap) {
+      maxDeliverGap = gap;
+    }
+    if (gap > 0.12) {
+      bigDeliverGapCount++;
+      NSLog(@"[XuperPad] decodificador: hueco de presentacion %.3fs pts %.2f", gap, frame.pts);
+    }
+  }
+  lastDeliverWall = deliverWall;
   id<XPDecoderDelegate> delegate = self.delegate;
   if (delegate != nil) {
     [delegate decoder:self didProduceVideoFrame:frame];
@@ -2009,6 +2050,12 @@ lastCopySeconds = 0;
       continue;
     }
     frameCount++;
+    switch (frame->pict_type) {
+      case AV_PICTURE_TYPE_I: pictICount++; break;
+      case AV_PICTURE_TYPE_P: pictPCount++; break;
+      case AV_PICTURE_TYPE_B: pictBCount++; break;
+      default: pictOtherCount++; break;
+    }
     if (frameCount == 1) {
       AVRational videoTimeBase = state->format->streams[state->videoIndex]->time_base;
       NSLog(@"[XuperPad] decodificador: primer fotograma %dx%d pix %d pts %lld base %d/%d",
