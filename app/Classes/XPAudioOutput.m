@@ -6,7 +6,7 @@
 #import <string.h>
 
 static const int XPAudioBufferFrames = 2048;
-static const int XPAudioBufferCount = 3200;
+static const int XPAudioBufferCount = 1400;
 
 @interface XPAudioOutput () {
   AudioQueueRef queue;
