@@ -1662,7 +1662,7 @@ lastCopySeconds = 0;
   videoContext->pkt_timebase = format->streams[state->videoIndex]->time_base;
   videoContext->thread_count = 4;
   if (videoCodec->id == AV_CODEC_ID_HEVC) {
-    videoContext->thread_type = FF_THREAD_FRAME;
+    videoContext->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
     videoContext->skip_loop_filter = AVDISCARD_ALL;
     videoContext->flags2 |= AV_CODEC_FLAG2_FAST;
   } else {
