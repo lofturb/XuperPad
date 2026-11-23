@@ -48,15 +48,33 @@ static NSUInteger const XPPortalMaxAttempts = 2;
   return body;
 }
 
-- (void)callPath:(NSString *)path
-      parameters:(NSDictionary *)parameters
-       completion:(void (^)(NSDictionary *response, NSError *error))completion
+- (NSMutableDictionary *)identityBodyWithSessionInfo:(NSDictionary *)sessionInfo
 {
-  [self callPath:path parameters:parameters attempt:0 completion:completion];
+  NSMutableDictionary *body = [NSMutableDictionary dictionary];
+  [body setObject:XPPortalCode forKey:@"portalCode"];
+  [body setObject:sessionInfo[@"userId"] ?: @"" forKey:@"userId"];
+  [body setObject:sessionInfo[@"userToken"] ?: @"" forKey:@"userToken"];
+  return body;
 }
 
 - (void)callPath:(NSString *)path
       parameters:(NSDictionary *)parameters
+       completion:(void (^)(NSDictionary *response, NSError *error))completion
+{
+  [self callPath:path parameters:parameters identityOnly:NO attempt:0 completion:completion];
+}
+
+- (void)callPath:(NSString *)path
+      parameters:(NSDictionary *)parameters
+    identityOnly:(BOOL)identityOnly
+       completion:(void (^)(NSDictionary *response, NSError *error))completion
+{
+  [self callPath:path parameters:parameters identityOnly:identityOnly attempt:0 completion:completion];
+}
+
+- (void)callPath:(NSString *)path
+      parameters:(NSDictionary *)parameters
+    identityOnly:(BOOL)identityOnly
          attempt:(NSUInteger)attempt
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
@@ -68,7 +86,9 @@ static NSUInteger const XPPortalMaxAttempts = 2;
       return;
     }
 
-    NSMutableDictionary *body = [self bodyWithSessionInfo:sessionInfo];
+    NSMutableDictionary *body = identityOnly
+        ? [self identityBodyWithSessionInfo:sessionInfo]
+        : [self bodyWithSessionInfo:sessionInfo];
     [body addEntriesFromDictionary:parameters];
 
     NSError *encodingError = nil;
@@ -130,14 +150,14 @@ static NSUInteger const XPPortalMaxAttempts = 2;
           NSLog(@"[XuperPad] portal %@ sesion muerta (%@), se renueva y se reintenta",
                 path, returnCode);
           [[XPSession sharedSession] invalidateSharedSeed];
-          [self callPath:path parameters:parameters attempt:attempt + 1 completion:completion];
+          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt + 1 completion:completion];
           return;
         }
         if (canRetry && [returnCode isEqualToString:XPGeoBlockedErrorCode]) {
           NSLog(@"[XuperPad] portal %@ bloqueo geografico (%@), se reintenta",
                 path, returnCode);
           [[XPSession sharedSession] invalidateSharedSeed];
-          [self callPath:path parameters:parameters attempt:attempt + 1 completion:completion];
+          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt + 1 completion:completion];
           return;
         }
         if (completion != nil) {
@@ -256,7 +276,8 @@ static NSUInteger const XPPortalMaxAttempts = 2;
                                 @"pageSize" : @50 };
   [self callPath:@"v3/searchByName"
        parameters:parameters
-        completion:^(NSDictionary *response, NSError *error) {
+     identityOnly:YES
+       completion:^(NSDictionary *response, NSError *error) {
     if (response == nil) {
       if (completion != nil) {
         completion(nil, error);
