@@ -210,10 +210,10 @@ static NSString *XPFFmpegErrorText(int code)
   return [NSString stringWithUTF8String:buffer] ?: @"desconocido";
 }
 
-static const NSUInteger XPVideoQueueLimit = 24;
-static const NSUInteger XPVideoPacketLimit = 320;
-static const double XPDemuxLeadSeconds = 1.80;
-static const double XPVideoLeadSeconds = 0.95;
+static const NSUInteger XPVideoQueueLimit = 36;
+static const NSUInteger XPVideoPacketLimit = 480;
+static const double XPDemuxLeadSeconds = 2.50;
+static const double XPVideoLeadSeconds = 1.50;
 static const double XPAudioQueueTargetSeconds = 1.00;
 static const double XPVideoDiscontinuitySeconds = 1.00;
 static const double XPVideoKeyframeWaitLimit = 8.00;
