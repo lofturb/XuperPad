@@ -136,9 +136,6 @@ typedef struct {
   BOOL paused;
   CFAbsoluteTime pauseStartedAt;
   double frozenClock;
-  volatile BOOL prerollActive;
-  BOOL prerollPending;
-  CFAbsoluteTime prerollStartAt;
   double streamDuration;
   BOOL hasPendingSeek;
   double pendingSeekTime;
@@ -209,7 +206,6 @@ typedef struct {
 - (double)packetTime:(AVPacket *)packet streamIndex:(int)streamIndex;
 - (double)packetDecodeTime:(AVPacket *)packet streamIndex:(int)streamIndex;
 - (void)resetAudioOutputWithRate:(int)rate;
-- (void)completePreroll;
 
 @end
 
@@ -229,8 +225,6 @@ static const double XPAudioQueueTargetSeconds = 25.00;
 static const double XPVideoDiscontinuitySeconds = 1.00;
 static const double XPVideoKeyframeWaitLimit = 8.00;
 static const double XPVideoPresentationDelaySeconds = 0.30;
-static const double XPAudioPrerollSeconds = 22.00;
-static const double XPAudioPrerollMaxSeconds = 45.00;
 
 static double XPResidentMegabytes(void)
 {
@@ -467,9 +461,6 @@ lastCopySeconds = 0;
     paused = NO;
     pauseStartedAt = 0;
     frozenClock = 0;
-    prerollActive = NO;
-    prerollPending = NO;
-    prerollStartAt = 0;
     streamDuration = 0;
     hasPendingSeek = NO;
     pendingSeekTime = 0;
@@ -611,9 +602,6 @@ lastCopySeconds = 0;
   paused = NO;
   pauseStartedAt = 0;
   frozenClock = 0;
-  prerollActive = NO;
-  prerollPending = YES;
-  prerollStartAt = 0;
   streamDuration = 0;
   hasPendingSeek = NO;
   pendingSeekTime = 0;
@@ -827,10 +815,6 @@ lastCopySeconds = 0;
         }
       }
     }
-    prerollActive = NO;
-    [videoCondition lock];
-    [videoCondition broadcast];
-    [videoCondition unlock];
     BOOL cancelled = !running;
     [self waitForVideoThread];
     [self closeInput];
@@ -877,16 +861,6 @@ lastCopySeconds = 0;
       }
       if (!running) {
         break;
-      }
-      if (prerollActive) {
-        if (prerollStartAt > 0 &&
-            CFAbsoluteTimeGetCurrent() - prerollStartAt > XPAudioPrerollMaxSeconds) {
-          NSLog(@"[XuperPad] decodificador: la precarga agoto el tiempo, se inicia igualmente");
-          [self completePreroll];
-        } else {
-          [NSThread sleepForTimeInterval:0.02];
-          continue;
-        }
       }
       XPQueuedPacket *item = [self takeVideoPacket];
       if (item == nil) {
@@ -1408,13 +1382,10 @@ lastCopySeconds = 0;
 
 - (void)resetAudioOutputWithRate:(int)rate
 {
-  prerollActive = NO;
-  prerollStartAt = 0;
   if (audioOutput == nil) {
     outputSampleRate = rate;
     return;
   }
-  [audioOutput setPrerollTargetSeconds:0];
   double before = [self masterClock];
   if (![audioOutput resetWithSampleRate:rate channels:2]) {
     NSLog(@"[XuperPad] decodificador: no se pudo reiniciar la salida de audio");
@@ -1429,20 +1400,6 @@ lastCopySeconds = 0;
   lastAudioClockAt = CFAbsoluteTimeGetCurrent();
   audioClockHealthy = hasAudioStart;
   [clockLock unlock];
-}
-
-- (void)completePreroll
-{
-  if (!prerollActive) {
-    return;
-  }
-  prerollActive = NO;
-  prerollPending = NO;
-  prerollStartAt = 0;
-  if (audioOutput != nil) {
-    [audioOutput setPrerollTargetSeconds:0];
-  }
-  NSLog(@"[XuperPad] decodificador: precarga completada, arranca la reproduccion");
 }
 
 - (void)performPendingSeek
@@ -1486,11 +1443,7 @@ lastCopySeconds = 0;
   [frameCondition lock];
   [frames removeAllObjects];
   [frameCondition unlock];
-  prerollActive = NO;
-  prerollPending = NO;
-  prerollStartAt = 0;
   if (audioOutput != nil) {
-    [audioOutput setPrerollTargetSeconds:0];
     [audioOutput resetWithSampleRate:outputSampleRate > 0 ? outputSampleRate : 44100 channels:2];
   }
   [subtitleLock lock];
@@ -1759,7 +1712,6 @@ lastCopySeconds = 0;
   if (chosenAudio >= 0) {
     [self openAudioForStreamIndex:(int)chosenAudio];
   }
-  prerollPending = NO;
 
   state->frame = av_frame_alloc();
   state->packet = av_packet_alloc();
@@ -1948,15 +1900,6 @@ lastCopySeconds = 0;
     }
   } else if (outputSampleRate != outputRate) {
     [self resetAudioOutputWithRate:outputRate];
-  }
-
-  if (prerollPending) {
-    prerollPending = NO;
-    if (audioOutput != nil) {
-      prerollActive = YES;
-      prerollStartAt = CFAbsoluteTimeGetCurrent();
-      [audioOutput setPrerollTargetSeconds:XPAudioPrerollSeconds];
-    }
   }
 
   selectedAudioIndex = streamIndex;
@@ -2362,9 +2305,6 @@ lastCopySeconds = 0;
           NSData *pcm = [NSData dataWithBytes:buffer
                                        length:(NSUInteger)(converted * 2 * (int)sizeof(int16_t))];
           [audioOutput enqueuePCM:pcm];
-          if (prerollActive && [audioOutput isPlaybackStarted]) {
-            [self completePreroll];
-          }
         }
         av_free(buffer);
       }

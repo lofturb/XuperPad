@@ -21,7 +21,7 @@
 
 #import <math.h>
 
-static const NSTimeInterval XPPlayerStartTimeout = 60.0;
+static const NSTimeInterval XPPlayerStartTimeout = 45.0;
 static const NSTimeInterval XPPlayerControlsTimeout = 3.5;
 static const NSTimeInterval XPPlayerRefreshInterval = 0.5;
 static const NSTimeInterval XPPlayerSubtitleInterval = 0.2;

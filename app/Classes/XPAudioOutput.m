@@ -17,7 +17,6 @@ static const int XPAudioBufferCount = 768;
   BOOL active;
   BOOL started;
   BOOL warnedAboutStall;
-  double prerollTargetSeconds;
   int rate;
   int channelCount;
   long long samplesAccepted;
@@ -53,7 +52,6 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     active = NO;
     started = NO;
     warnedAboutStall = NO;
-    prerollTargetSeconds = 0.0;
     rate = 44100;
     channelCount = 2;
     samplesAccepted = 0;
@@ -211,14 +209,11 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
   if (queue == NULL) {
     return;
   }
-  [stateCondition lock];
-  BOOL canStart = started;
-  [stateCondition unlock];
   [queueLock lock];
   if (queue != NULL) {
     if (paused) {
       AudioQueuePause(queue);
-    } else if (canStart) {
+    } else {
       OSStatus status = AudioQueueStart(queue, NULL);
       if (status != noErr) {
         NSLog(@"[XuperPad] audio: no se pudo reanudar la cola (%d)", (int)status);
@@ -343,15 +338,8 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
 - (void)startQueueIfNeeded
 {
   [stateCondition lock];
-  BOOL shouldStart = NO;
-  if (!started) {
-    long long queued = samplesAccepted - samplesPlayed;
-    double seconds = rate > 0 ? (double)queued / (double)rate : 0.0;
-    if (seconds >= prerollTargetSeconds) {
-      started = YES;
-      shouldStart = YES;
-    }
-  }
+  BOOL shouldStart = !started;
+  started = YES;
   [stateCondition unlock];
   if (shouldStart) {
     [queueLock lock];
@@ -365,21 +353,6 @@ static void XPAudioQueueCallback(void *userData, AudioQueueRef audioQueue, Audio
     }
     [queueLock unlock];
   }
-}
-
-- (void)setPrerollTargetSeconds:(double)seconds
-{
-  [stateCondition lock];
-  prerollTargetSeconds = seconds > 0.0 ? seconds : 0.0;
-  [stateCondition unlock];
-}
-
-- (BOOL)isPlaybackStarted
-{
-  [stateCondition lock];
-  BOOL value = started;
-  [stateCondition unlock];
-  return value;
 }
 
 - (double)queuedSeconds
