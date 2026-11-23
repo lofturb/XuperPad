@@ -210,6 +210,19 @@ static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
                   timeout:(NSTimeInterval)timeout
               completion:(XPTransportCompletion)completion
 {
+  if ([NSThread isMainThread]) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      [self postToPortalHosts:hosts
+                          path:path
+                       headers:headers
+                          body:body
+                       timeout:timeout
+                       attempt:0
+                     lastError:nil
+                    completion:completion];
+    });
+    return;
+  }
   [self postToPortalHosts:hosts
                       path:path
                    headers:headers
@@ -300,6 +313,12 @@ static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
                timeout:(NSTimeInterval)timeout
             completion:(XPTransportCompletion)completion
 {
+  if ([NSThread isMainThread]) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+      [self getFromAddress:address headers:headers timeout:timeout completion:completion];
+    });
+    return;
+  }
   if (address == nil) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (completion != nil) {
