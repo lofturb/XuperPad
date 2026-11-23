@@ -2418,12 +2418,19 @@ lastCopySeconds = 0;
 
 - (void)pushFrame:(XPVideoFrameData *)frame
 {
+  double playedNow = (audioOutput != nil) ? [audioOutput playedSeconds] : 0.0;
   [clockLock lock];
   BOOL firstFrame = !hasVideoStart;
   if (firstFrame) {
     hasVideoStart = YES;
     videoStartPTS = frame.pts;
-    videoWall = CFAbsoluteTimeGetCurrent();
+    double rate = (double)currentRate;
+    if (hasAudioStart && audioOutput != nil && rate > 0) {
+      double audioNow = audioStartPTS + audioOffset + playedNow * rate;
+      videoWall = CFAbsoluteTimeGetCurrent() - (audioNow - videoStartPTS) / rate;
+    } else {
+      videoWall = CFAbsoluteTimeGetCurrent();
+    }
     videoMasterOffset = 0.0;
   }
   [clockLock unlock];
