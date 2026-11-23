@@ -75,8 +75,18 @@
                            action:@selector(clearRequested:)
                  forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:self.clearControl];
+
+    UITapGestureRecognizer *tap =
+      [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(focusTextField:)];
+    tap.cancelsTouchesInView = NO;
+    [self addGestureRecognizer:tap];
   }
   return self;
+}
+
+- (void)focusTextField:(UITapGestureRecognizer *)recognizer
+{
+  [self.textField becomeFirstResponder];
 }
 
 - (void)layoutSubviews

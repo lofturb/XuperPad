@@ -77,6 +77,12 @@
   return YES;
 }
 
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
+{
+  [self becomeFirstResponder];
+  [super touchesBegan:touches withEvent:event];
+}
+
 - (BOOL)becomeFirstResponder
 {
   BOOL became = [super becomeFirstResponder];
