@@ -1500,7 +1500,14 @@ lastCopySeconds = 0;
                       + videoMasterOffset;
     double audioClock = audioStartPTS + audioOffset + lastAudioClock * (double)currentRate;
     double delta = videoClock - audioClock;
-    if (delta > 0.05 || delta < -0.05) {
+    if (delta > 0.5 || delta < -0.5) {
+      double now = CFAbsoluteTimeGetCurrent();
+      double rate = (double)currentRate;
+      if (rate > 0) {
+        videoWall = now - (audioClock - videoStartPTS - videoMasterOffset) / rate;
+      }
+      NSLog(@"[XuperPad] decodificador: reloj de video reanclado %.2fs", delta);
+    } else if (delta > 0.05 || delta < -0.05) {
       audioOffset += delta;
       NSLog(@"[XuperPad] decodificador: audio realineado %.2fs", delta);
     }
