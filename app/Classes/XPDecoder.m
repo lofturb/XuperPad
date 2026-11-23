@@ -211,7 +211,7 @@ static NSString *XPFFmpegErrorText(int code)
 }
 
 static const NSUInteger XPVideoQueueLimit = 6;
-static const NSUInteger XPVideoPacketLimit = 64;
+static const NSUInteger XPVideoPacketLimit = 240;
 static const double XPDemuxLeadSeconds = 0.50;
 static const double XPVideoLeadSeconds = 0.30;
 static const double XPAudioQueueTargetSeconds = 0.75;
@@ -1615,7 +1615,8 @@ lastCopySeconds = 0;
   videoContext->thread_count = 4;
   if (videoCodec->id == AV_CODEC_ID_HEVC) {
     videoContext->thread_type = FF_THREAD_FRAME;
-    videoContext->skip_loop_filter = AVDISCARD_NONINTRA;
+    videoContext->skip_loop_filter = AVDISCARD_ALL;
+    videoContext->flags2 |= AV_CODEC_FLAG2_FAST;
   } else {
     videoContext->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
   }

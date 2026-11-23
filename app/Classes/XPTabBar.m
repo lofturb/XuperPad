@@ -50,8 +50,18 @@
 
   for (NSUInteger index = 0; index < count; index++) {
     BOOL active = index == self.selectedIndex;
-    UIColor *tint = active ? XPColorAccent() : XPColorTextMuted();
     CGFloat centerX = width * ((CGFloat)index + 0.5f);
+    if (active) {
+      CGRect pill = CGRectMake(centerX - 31.0f, 4.0f, 62.0f, 33.0f);
+      [[XPColorAccent() colorWithAlphaComponent:0.16f] setFill];
+      [XPRoundedPath(pill, 16.5f) fill];
+      CGRect bar = CGRectMake(width * (CGFloat)index + 14.0f,
+                              0,
+                              MAX(10.0f, width - 28.0f),
+                              2.0f);
+      XPDrawHorizontalGradient(context, bar, XPColorAccent(), XPColorAccentAlt());
+    }
+    UIColor *tint = active ? XPColorAccent() : XPColorTextMuted();
     CGRect iconBox = CGRectMake(centerX - 10.0f, 8.0f, 20.0f, 20.0f);
     [self drawIcon:[self.tabIcons[index] isKindOfClass:[NSString class]]
                    ? (NSString *)self.tabIcons[index]
@@ -63,7 +73,7 @@
     NSString *title = [self.tabTitles[index] isKindOfClass:[NSString class]]
       ? (NSString *)self.tabTitles[index]
       : @"";
-    NSDictionary *attributes = @{ NSFontAttributeName : XPFontCaption(active ? 10.0f : 9.5f),
+    NSDictionary *attributes = @{ NSFontAttributeName : XPFontCaption(active ? 10.5f : 10.0f),
                                   NSForegroundColorAttributeName : tint };
     NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
     style.alignment = NSTextAlignmentCenter;

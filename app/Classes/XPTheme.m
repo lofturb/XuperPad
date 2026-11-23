@@ -1,4 +1,4 @@
-//
+﻿//
 //  XPTheme.m
 //
 
@@ -6,65 +6,65 @@
 
 UIColor *XPColorBackground(void)
 {
-  return [UIColor colorWithRed:10.0f / 255.0f
-                         green:12.0f / 255.0f
-                          blue:18.0f / 255.0f
+  return [UIColor colorWithRed:6.0f / 255.0f
+                         green:8.0f / 255.0f
+                          blue:15.0f / 255.0f
                          alpha:1.0f];
 }
 
 UIColor *XPColorSurface(void)
 {
-  return [UIColor colorWithRed:20.0f / 255.0f
-                         green:24.0f / 255.0f
-                          blue:36.0f / 255.0f
+  return [UIColor colorWithRed:16.0f / 255.0f
+                         green:23.0f / 255.0f
+                          blue:38.0f / 255.0f
                          alpha:1.0f];
 }
 
 UIColor *XPColorSurfaceAlt(void)
 {
-  return [UIColor colorWithRed:30.0f / 255.0f
+  return [UIColor colorWithRed:27.0f / 255.0f
                          green:36.0f / 255.0f
-                          blue:52.0f / 255.0f
+                          blue:56.0f / 255.0f
                          alpha:1.0f];
 }
 
 UIColor *XPColorAccent(void)
 {
-  return [UIColor colorWithRed:0.91f
-                         green:0.15f
-                          blue:0.24f
+  return [UIColor colorWithRed:1.0f
+                         green:0.176f
+                          blue:0.435f
                          alpha:1.0f];
 }
 
 UIColor *XPColorAccentAlt(void)
 {
-  return [UIColor colorWithRed:0.45f
-                         green:0.27f
-                          blue:0.98f
+  return [UIColor colorWithRed:0.482f
+                         green:0.361f
+                          blue:1.0f
                          alpha:1.0f];
 }
 
 UIColor *XPColorTextPrimary(void)
 {
-  return [UIColor colorWithRed:0.95f
-                         green:0.96f
-                          blue:0.98f
+  return [UIColor colorWithRed:0.961f
+                         green:0.969f
+                          blue:0.988f
                          alpha:1.0f];
 }
 
 UIColor *XPColorTextMuted(void)
 {
-  return [UIColor colorWithRed:0.58f
-                         green:0.62f
-                          blue:0.70f
+  return [UIColor colorWithRed:0.592f
+                         green:0.631f
+                          blue:0.722f
                          alpha:1.0f];
 }
 
 UIColor *XPColorDivider(void)
 {
-  return [UIColor colorWithRed:0.16f
-                         green:0.19f
-                          blue:0.26f
+  return [UIColor colorWithRed:0.133f
+                         green:0.173f
+                          blue:0.267f
                          alpha:1.0f];
 }
 

@@ -65,13 +65,13 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
 - (void)buildInterface
 {
   self.brandLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
-  self.brandLabel.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+  self.brandLabel.font = [UIFont systemFontOfSize:9.5f weight:UIFontWeightBold];
   self.brandLabel.textColor = XPColorAccent();
   self.brandLabel.text = @"XUPER TV";
   [self.view addSubview:self.brandLabel];
 
   self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
-  self.titleLabel.font = XPFontDisplay(19.0f);
+  self.titleLabel.font = XPFontDisplay(22.0f);
   self.titleLabel.textColor = XPColorTextPrimary();
   self.titleLabel.text = self.screenTitle ?: @"Catálogo";
   [self.view addSubview:self.titleLabel];
@@ -123,13 +123,13 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   CGFloat margin = 14.0f;
   CGFloat top = 20.0f;
 
-  self.brandLabel.frame = CGRectMake(margin, top + 8.0f, width - margin * 2.0f, 11.0f);
-  self.titleLabel.frame = CGRectMake(margin, top + 21.0f, width - margin * 2.0f, 24.0f);
+  self.brandLabel.frame = CGRectMake(margin, top + 7.0f, width - margin * 2.0f, 12.0f);
+  self.titleLabel.frame = CGRectMake(margin, top + 23.0f, width - margin * 2.0f, 28.0f);
 
-  CGFloat chipsTop = top + 52.0f;
+  CGFloat chipsTop = top + 56.0f;
   if (self.searchField != nil) {
-    self.searchField.frame = CGRectMake(margin, top + 50.0f, width - margin * 2.0f, 34.0f);
-    chipsTop = top + 92.0f;
+    self.searchField.frame = CGRectMake(margin, top + 56.0f, width - margin * 2.0f, 36.0f);
+    chipsTop = top + 100.0f;
   }
 
   self.chipsScrollView.frame = CGRectMake(0, chipsTop, width, 34.0f);

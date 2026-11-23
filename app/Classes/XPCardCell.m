@@ -48,8 +48,10 @@
 
     self.posterView = [[XPDrawnImageView alloc] initWithFrame:CGRectZero];
     self.posterView.imageMode = XPDrawnImageModeFill;
-    self.posterView.cornerRadius = 8.0f;
+    self.posterView.cornerRadius = 10.0f;
     self.posterView.fillColor = XPColorSurface();
+    self.posterView.borderWidth = 1.0f;
+    self.posterView.borderColor = [UIColor colorWithWhite:1.0f alpha:0.09f];
     [self.contentView addSubview:self.posterView];
 
     self.shadeView = [[XPCardShadeView alloc] initWithFrame:CGRectZero];
@@ -58,17 +60,17 @@
     [self.contentView addSubview:self.shadeView];
 
     self.badgeLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
-    self.badgeLabel.font = [UIFont systemFontOfSize:7.5f weight:UIFontWeightBold];
+    self.badgeLabel.font = [UIFont systemFontOfSize:7.0f weight:UIFontWeightBold];
     self.badgeLabel.textColor = [UIColor whiteColor];
     self.badgeLabel.textAlignment = NSTextAlignmentCenter;
     self.badgeLabel.layer.backgroundColor = XPColorAccent().CGColor;
-    self.badgeLabel.layer.cornerRadius = 3.0f;
+    self.badgeLabel.layer.cornerRadius = 7.0f;
     self.badgeLabel.layer.masksToBounds = YES;
     self.badgeLabel.hidden = YES;
     [self.contentView addSubview:self.badgeLabel];
 
     self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
-    self.titleLabel.font = XPFontCaption(10.5f);
+    self.titleLabel.font = XPFontMedium(11.0f);
     self.titleLabel.textColor = XPColorTextPrimary();
     self.titleLabel.numberOfLines = 2;
     self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -90,7 +92,7 @@
   self.titleLabel.frame = CGRectMake(0, posterHeight + 4.0f, width, textHeight - 6.0f);
 
   if (!self.badgeLabel.hidden) {
-    self.badgeLabel.frame = CGRectMake(5.0f, 5.0f, 34.0f, 13.0f);
+    self.badgeLabel.frame = CGRectMake(6.0f, 6.0f, 40.0f, 14.0f);
   }
 }
 

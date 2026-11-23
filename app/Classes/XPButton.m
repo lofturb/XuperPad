@@ -52,12 +52,19 @@
   }
 
   if (self.buttonStyle == XPButtonStylePrimary) {
+    CGContextSaveGState(context);
+    [XPRoundedPath(area, 10.0f) addClip];
     XPDrawHorizontalGradient(context, area, XPColorAccent(), XPColorAccentAlt());
+    CGContextRestoreGState(context);
+    [[UIColor colorWithWhite:1.0f alpha:0.18f] setStroke];
+    UIBezierPath *glow = XPRoundedPath(area, 10.0f);
+    glow.lineWidth = 1.0f;
+    [glow stroke];
   } else {
-    [[XPColorSurfaceAlt() colorWithAlphaComponent:0.9f] setFill];
-    [XPRoundedPath(area, 12.0f) fill];
+    [[XPColorSurfaceAlt() colorWithAlphaComponent:0.75f] setFill];
+    [XPRoundedPath(area, 10.0f) fill];
     [XPColorDivider() setStroke];
-    UIBezierPath *border = XPRoundedPath(area, 12.0f);
+    UIBezierPath *border = XPRoundedPath(area, 10.0f);
     border.lineWidth = 1.0f;
     [border stroke];
   }

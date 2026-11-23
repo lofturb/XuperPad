@@ -53,16 +53,24 @@
 
   if (self.selected) {
     XPDrawHorizontalGradient(context, area, XPColorAccent(), XPColorAccentAlt());
+    [[UIColor colorWithWhite:1.0f alpha:0.22f] setStroke];
+    UIBezierPath *glow = XPRoundedPath(area, area.size.height / 2.0f);
+    glow.lineWidth = 1.0f;
+    [glow stroke];
   } else {
-    [[XPColorSurfaceAlt() colorWithAlphaComponent:0.85f] setFill];
+    [[XPColorSurfaceAlt() colorWithAlphaComponent:0.55f] setFill];
     [XPRoundedPath(area, area.size.height / 2.0f) fill];
+    [XPColorDivider() setStroke];
+    UIBezierPath *edge = XPRoundedPath(area, area.size.height / 2.0f);
+    edge.lineWidth = 1.0f;
+    [edge stroke];
   }
 
   NSString *title = self.chipTitle;
   if (title.length == 0) {
     return;
   }
-  UIColor *textColor = self.selected ? [UIColor whiteColor] : XPColorTextPrimary();
+  UIColor *textColor = self.selected ? [UIColor whiteColor] : XPColorTextMuted();
   NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
   style.alignment = NSTextAlignmentCenter;
   style.lineBreakMode = NSLineBreakByTruncatingTail;

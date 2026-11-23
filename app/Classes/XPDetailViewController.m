@@ -183,13 +183,13 @@
   self.posterView = [[XPDrawnImageView alloc] initWithFrame:CGRectZero];
   self.posterView.imageMode = XPDrawnImageModeFill;
   self.posterView.fillColor = XPColorSurface();
-  self.posterView.cornerRadius = 8.0f;
-  self.posterView.borderWidth = 1.0f;
-  self.posterView.borderColor = XPColorDivider();
+    self.posterView.cornerRadius = 12.0f;
+    self.posterView.borderWidth = 1.0f;
+    self.posterView.borderColor = [UIColor colorWithWhite:1.0f alpha:0.12f];
   [self.contentView addSubview:self.posterView];
 
   self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
-  self.titleLabel.font = XPFontDisplay(16.0f);
+    self.titleLabel.font = XPFontDisplay(18.0f);
   self.titleLabel.textColor = XPColorTextPrimary();
   self.titleLabel.numberOfLines = 3;
   self.titleLabel.text = self.catalogTitle[@"name"];
