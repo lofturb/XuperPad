@@ -120,6 +120,49 @@
     return;
   }
 
+  if ([identifier isEqualToString:@"list"]) {
+    for (NSInteger line = 0; line < 3; line++) {
+      CGRect bar = CGRectMake(CGRectGetMinX(area),
+                              CGRectGetMinY(area) + 3.0f + line * 6.0f,
+                              CGRectGetWidth(area),
+                              2.0f);
+      [XPRoundedPath(bar, 1.0f) fill];
+    }
+    return;
+  }
+
+  if ([identifier isEqualToString:@"gear"]) {
+    CGPoint center = CGPointMake(CGRectGetMidX(area), CGRectGetMidY(area));
+    CGFloat radius = CGRectGetWidth(area) / 2.0f - 3.5f;
+    UIBezierPath *ring = [UIBezierPath bezierPathWithArcCenter:center
+                                                        radius:radius
+                                                    startAngle:0.0f
+                                                      endAngle:(CGFloat)(M_PI * 2.0)
+                                                     clockwise:YES];
+    ring.lineWidth = 1.6f;
+    [ring stroke];
+    UIBezierPath *dot = [UIBezierPath bezierPathWithArcCenter:center
+                                                       radius:2.2f
+                                                   startAngle:0.0f
+                                                     endAngle:(CGFloat)(M_PI * 2.0)
+                                                    clockwise:YES];
+    [dot fill];
+    for (NSInteger tick = 0; tick < 4; tick++) {
+      CGFloat angle = (CGFloat)(M_PI * 0.5) * (CGFloat)tick;
+      CGFloat cosValue = (CGFloat)cos(angle);
+      CGFloat sinValue = (CGFloat)sin(angle);
+      UIBezierPath *spoke = [UIBezierPath bezierPath];
+      [spoke moveToPoint:CGPointMake(center.x + cosValue * (radius + 0.5f),
+                                     center.y + sinValue * (radius + 0.5f))];
+      [spoke addLineToPoint:CGPointMake(center.x + cosValue * (radius + 3.5f),
+                                        center.y + sinValue * (radius + 3.5f))];
+      spoke.lineWidth = 1.6f;
+      spoke.lineCapStyle = kCGLineCapRound;
+      [spoke stroke];
+    }
+    return;
+  }
+
   CGFloat side = 8.0f;
   CGFloat gap = 3.0f;
   for (NSInteger row = 0; row < 2; row++) {

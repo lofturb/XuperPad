@@ -4,17 +4,22 @@
 
 #import "XPRootViewController.h"
 #import "XPCatalogViewController.h"
+#import "XPLibraryViewController.h"
+#import "XPSettingsViewController.h"
 #import "XPTabBar.h"
 #import "XPTheme.h"
 #import "XPDrawnNavigationController.h"
 
 static const CGFloat XPRootTabBarHeight = 52.0f;
+static const NSUInteger XPRootSectionCount = 4;
 
 @interface XPRootViewController ()
 @property (nonatomic, strong) UIView *containerView;
 @property (nonatomic, strong) XPTabBar *tabBarView;
 @property (nonatomic, strong) XPDrawnNavigationController *catalogNavigation;
 @property (nonatomic, strong) XPDrawnNavigationController *liveNavigation;
+@property (nonatomic, strong) XPDrawnNavigationController *libraryNavigation;
+@property (nonatomic, strong) XPDrawnNavigationController *settingsNavigation;
 @property (nonatomic, assign) NSUInteger selectedSection;
 @property (nonatomic, assign) BOOL tabBarVisible;
 @end
@@ -34,7 +39,7 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
   [self.view addSubview:self.containerView];
 
   XPCatalogViewController *catalog = [[XPCatalogViewController alloc] init];
-  catalog.screenTitle = @"Catálogo";
+  catalog.screenTitle = @"Catalogo";
   self.catalogNavigation = [[XPDrawnNavigationController alloc] initWithRootViewController:catalog];
 
   XPCatalogViewController *live = [[XPCatalogViewController alloc] init];
@@ -42,30 +47,47 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
   live.showsLiveChannels = YES;
   self.liveNavigation = [[XPDrawnNavigationController alloc] initWithRootViewController:live];
 
-  [self addChildViewController:self.catalogNavigation];
-  [self.containerView addSubview:self.catalogNavigation.view];
-  [self.catalogNavigation didMoveToParentViewController:self];
+  XPLibraryViewController *library = [[XPLibraryViewController alloc] init];
+  library.screenTitle = @"Mi lista";
+  self.libraryNavigation = [[XPDrawnNavigationController alloc] initWithRootViewController:library];
 
-  [self addChildViewController:self.liveNavigation];
-  [self.containerView addSubview:self.liveNavigation.view];
-  [self.liveNavigation didMoveToParentViewController:self];
-  self.liveNavigation.view.hidden = YES;
+  XPSettingsViewController *settings = [[XPSettingsViewController alloc] init];
+  settings.screenTitle = @"Ajustes";
+  self.settingsNavigation = [[XPDrawnNavigationController alloc] initWithRootViewController:settings];
 
   __weak XPRootViewController *weakSelf = self;
-  self.catalogNavigation.stackChangeHandler = ^{
-    [weakSelf updateTabBarForVisibleStack];
-  };
-  self.liveNavigation.stackChangeHandler = ^{
-    [weakSelf updateTabBarForVisibleStack];
-  };
+  for (NSUInteger index = 0; index < XPRootSectionCount; index++) {
+    XPDrawnNavigationController *navigation = [self navigationAtIndex:index];
+    [self addChildViewController:navigation];
+    [self.containerView addSubview:navigation.view];
+    [navigation didMoveToParentViewController:self];
+    navigation.view.hidden = (index != 0);
+    navigation.stackChangeHandler = ^{
+      [weakSelf updateTabBarForVisibleStack];
+    };
+  }
 
-  self.tabBarView = [[XPTabBar alloc] initWithTitles:@[ @"Catálogo", @"TV en vivo" ]
-                                                icons:@[ @"grid", @"live" ]];
+  self.tabBarView = [[XPTabBar alloc] initWithTitles:@[ @"Catalogo", @"TV en vivo", @"Mi lista", @"Ajustes" ]
+                                                icons:@[ @"grid", @"live", @"list", @"gear" ]];
   [self.view addSubview:self.tabBarView];
 
   self.tabBarView.selectionHandler = ^(NSUInteger index) {
     [weakSelf selectSectionAtIndex:index];
   };
+}
+
+- (XPDrawnNavigationController *)navigationAtIndex:(NSUInteger)index
+{
+  switch (index) {
+    case 1:
+      return self.liveNavigation;
+    case 2:
+      return self.libraryNavigation;
+    case 3:
+      return self.settingsNavigation;
+    default:
+      return self.catalogNavigation;
+  }
 }
 
 - (void)viewDidLayoutSubviews
@@ -76,8 +98,9 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
   CGFloat tabHeight = self.tabBarVisible ? XPRootTabBarHeight : 0.0f;
 
   self.containerView.frame = CGRectMake(0, 0, width, MAX(0.0f, height - tabHeight));
-  self.catalogNavigation.view.frame = self.containerView.bounds;
-  self.liveNavigation.view.frame = self.containerView.bounds;
+  for (NSUInteger index = 0; index < XPRootSectionCount; index++) {
+    [self navigationAtIndex:index].view.frame = self.containerView.bounds;
+  }
 
   self.tabBarView.frame = CGRectMake(0, MAX(0.0f, height - tabHeight), width, tabHeight);
   self.tabBarView.hidden = !self.tabBarVisible;
@@ -85,7 +108,7 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
 
 - (XPDrawnNavigationController *)visibleNavigation
 {
-  return (self.selectedSection == 0) ? self.catalogNavigation : self.liveNavigation;
+  return [self navigationAtIndex:self.selectedSection];
 }
 
 - (void)updateTabBarForVisibleStack
@@ -104,23 +127,20 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
 
 - (void)selectSectionAtIndex:(NSUInteger)index
 {
-  if (index > 1 || index == self.selectedSection) {
+  if (index >= XPRootSectionCount || index == self.selectedSection) {
     return;
   }
-  XPDrawnNavigationController *target = (index == 0) ? self.catalogNavigation : self.liveNavigation;
-  XPDrawnNavigationController *other = (index == 0) ? self.liveNavigation : self.catalogNavigation;
-
-  [other popToRootViewControllerAnimated:NO];
+  for (NSUInteger other = 0; other < XPRootSectionCount; other++) {
+    XPDrawnNavigationController *navigation = [self navigationAtIndex:other];
+    if (other != index) {
+      [navigation popToRootViewControllerAnimated:NO];
+    }
+    navigation.view.hidden = (other != index);
+  }
   self.selectedSection = index;
-  self.catalogNavigation.view.hidden = (index != 0);
-  self.liveNavigation.view.hidden = (index != 1);
   self.tabBarVisible = YES;
   [self.view setNeedsLayout];
   [self.view layoutIfNeeded];
-
-  if (target.viewControllers.count == 1) {
-    return;
-  }
 }
 
 @end

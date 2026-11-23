@@ -66,6 +66,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 @property (nonatomic, assign) float seekHoldProgress;
 @property (nonatomic, assign) NSTimeInterval seekHoldUntil;
 @property (nonatomic, assign) NSTimeInterval lastProgressRecord;
+@property (nonatomic, assign) BOOL audioPreferenceApplied;
 @end
 
 @implementation XPPlayerViewController
@@ -657,6 +658,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   self.playbackFinished = NO;
   self.hasPendingResume = NO;
   self.startPosition = 0;
+  self.audioPreferenceApplied = NO;
   id item = self.chapters[index];
   if (![item isKindOfClass:[NSDictionary class]]) {
     return;
@@ -1149,6 +1151,22 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   self.optionsPanel.audioTracks = tracks ?: @[];
   self.optionsPanel.selectedAudioIndex = selectedIndex;
   self.optionsPanel.informationText = decoder.informationText;
+
+  if (!self.audioPreferenceApplied) {
+    self.audioPreferenceApplied = YES;
+    NSString *preferred = [[XPStore sharedStore] preferredAudioLanguage];
+    if (preferred.length > 0) {
+      for (XPTrackInfo *track in tracks) {
+        NSString *code = [track.languageCode lowercaseString];
+        if (track.available && [code hasPrefix:preferred]) {
+          if (track.streamIndex != selectedIndex) {
+            [decoder selectAudioTrack:track.streamIndex];
+          }
+          break;
+        }
+      }
+    }
+  }
 }
 
 - (void)decoder:(XPDecoder *)decoder didUpdateSubtitleTracks:(NSArray *)tracks selectedIndex:(NSInteger)selectedIndex

@@ -43,6 +43,8 @@ XuperPad_FILES = main.m \
 	Classes/XPBackControl.m \
 	Classes/XPRootViewController.m \
 	Classes/XPCatalogViewController.m \
+	Classes/XPLibraryViewController.m \
+	Classes/XPSettingsViewController.m \
 	Classes/XPDetailViewController.m \
 	Classes/XPPlayerViewController.m \
 	Classes/XPPlayerControls.m \
