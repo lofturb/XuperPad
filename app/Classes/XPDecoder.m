@@ -2426,7 +2426,7 @@ lastCopySeconds = 0;
     videoWall = CFAbsoluteTimeGetCurrent();
     double master = 0.0;
     if (hasAudioStart) {
-      master = audioStartPTS + audioOffset + lastAudioClock * (double)currentRate;
+      master = audioStartPTS + audioOffset;
     } else {
       master = videoStartPTS;
     }
