@@ -10,8 +10,8 @@
 #import "XPPortalParser.h"
 
 static NSString *const XPPortalClientErrorDomain = @"XPPortalClient";
-static NSTimeInterval const XPPortalTimeout = 18;
-static NSUInteger const XPPortalMaxAttempts = 4;
+static NSTimeInterval const XPPortalTimeout = 8;
+static NSUInteger const XPPortalMaxAttempts = 2;
 
 @interface XPPortalClient ()
 @property (nonatomic, strong) NSMutableDictionary *cache;

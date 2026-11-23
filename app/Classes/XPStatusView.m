@@ -7,6 +7,8 @@
 #import "XPButton.h"
 #import "XPDrawnLabel.h"
 
+#import <QuartzCore/QuartzCore.h>
+
 static const double XPPiValue = 3.14159265358979323846;
 
 @interface XPRingView : UIView
@@ -64,19 +66,18 @@ static const double XPPiValue = 3.14159265358979323846;
 - (void)startAnimating
 {
   self.hidden = NO;
-  [self.layer removeAllAnimations];
-  [UIView animateWithDuration:0.9f
-                        delay:0.0f
-                      options:UIViewAnimationOptionRepeat | UIViewAnimationOptionCurveLinear
-                   animations:^{
-    self.transform = CGAffineTransformMakeRotation((float)(2.0 * XPPiValue));
-  }
-                   completion:nil];
+  [self.layer removeAnimationForKey:@"XPXPRingSpin"];
+  CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+  spin.byValue = @(2.0 * XPPiValue);
+  spin.duration = 1.0;
+  spin.repeatCount = HUGE_VALF;
+  spin.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
+  [self.layer addAnimation:spin forKey:@"XPXPRingSpin"];
 }
 
 - (void)stopAnimating
 {
-  [self.layer removeAllAnimations];
+  [self.layer removeAnimationForKey:@"XPXPRingSpin"];
   self.transform = CGAffineTransformIdentity;
 }
 

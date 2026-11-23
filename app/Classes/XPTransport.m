@@ -12,6 +12,7 @@ static NSString *const XPTransportErrorDomain = @"XPTransport";
 
 static NSMutableDictionary *gXPAddressCache = nil;
 static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
+static NSUInteger const XPTransportMaxHosts = 4;
 
 @interface XPTransport ()
 + (void)postToPortalHosts:(NSArray *)hosts
@@ -242,7 +243,7 @@ static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
                 lastError:(NSError *)lastError
                completion:(XPTransportCompletion)completion
 {
-  if (attempt >= hosts.count) {
+  if (attempt >= hosts.count || attempt >= XPTransportMaxHosts) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (completion != nil) {
         completion(nil, lastError);
@@ -293,6 +294,16 @@ static NSTimeInterval const XPAddressCacheLifetime = 6 * 60;
     dispatch_async(dispatch_get_main_queue(), ^{
       if (completion != nil) {
         completion(data, nil);
+      }
+    });
+    return;
+  }
+
+  if (error != nil && [error.domain isEqualToString:XPTransportErrorDomain] &&
+      error.code >= 400 && error.code < 500) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (completion != nil) {
+        completion(nil, error);
       }
     });
     return;
