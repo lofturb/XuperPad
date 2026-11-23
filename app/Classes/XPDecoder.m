@@ -224,7 +224,7 @@ static const double XPVideoLeadSeconds = 1.50;
 static const double XPAudioQueueTargetSeconds = 1.00;
 static const double XPVideoDiscontinuitySeconds = 1.00;
 static const double XPVideoKeyframeWaitLimit = 8.00;
-static const double XPVideoPresentationDelaySeconds = 0.12;
+static const double XPVideoPresentationDelaySeconds = 0.22;
 
 static double XPResidentMegabytes(void)
 {
