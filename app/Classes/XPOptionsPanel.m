@@ -4,6 +4,8 @@
 #import "XPChipButton.h"
 #import "XPDecoder.h"
 #import "XPTheme.h"
+#import "XPDrawnLabel.h"
+#import "XPDrawnScrollView.h"
 
 #import <math.h>
 
@@ -24,9 +26,9 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 @end
 
 @interface XPOptionsPanel () {
-  UILabel *titleLabel;
+  XPDrawnLabel *titleLabel;
   XPButton *closeButton;
-  UIScrollView *scrollView;
+  XPDrawnScrollView *scrollView;
   NSMutableArray *rows;
   NSMutableArray *audioButtons;
   NSMutableArray *subtitleButtons;
@@ -49,7 +51,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
     subtitleButtons = [NSMutableArray array];
     rateChips = [NSMutableArray array];
 
-    titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     titleLabel.font = XPFontMedium(14.0f);
     titleLabel.textColor = XPColorTextPrimary();
     titleLabel.text = @"Opciones";
@@ -61,9 +63,9 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
            forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:closeButton];
 
-    scrollView = [[UIScrollView alloc] initWithFrame:CGRectZero];
-    scrollView.showsHorizontalScrollIndicator = NO;
-    scrollView.showsVerticalScrollIndicator = NO;
+    scrollView = [[XPDrawnScrollView alloc] initWithFrame:CGRectZero];
+    scrollView.scrollsHorizontally = NO;
+    scrollView.scrollsVertically = YES;
     [self addSubview:scrollView];
 
     self.selectedAudioIndex = -1;
@@ -131,7 +133,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 
 - (XPOptionRow *)addSectionWithTitle:(NSString *)text
 {
-  UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+  XPDrawnLabel *label = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   label.font = XPFontCaption(10.5f);
   label.textColor = XPColorTextMuted();
   label.text = text;
@@ -156,7 +158,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 
   [self addSectionWithTitle:@"AUDIO"];
   if (self.audioTracks.count == 0) {
-    UILabel *empty = [[UILabel alloc] initWithFrame:CGRectZero];
+    XPDrawnLabel *empty = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     empty.font = XPFontBody(13.0f);
     empty.textColor = XPColorTextMuted();
     empty.text = @"Esta reproducción no permite cambiar el idioma del audio";
@@ -203,7 +205,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   [subtitleButtons addObject:offButton];
 
   if (self.subtitleTracks.count == 0) {
-    UILabel *empty = [[UILabel alloc] initWithFrame:CGRectZero];
+    XPDrawnLabel *empty = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     empty.font = XPFontBody(13.0f);
     empty.textColor = XPColorTextMuted();
     empty.text = @"Este contenido no incluye pistas de subtítulos";
@@ -236,9 +238,9 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   }
 
   [self addSectionWithTitle:@"VELOCIDAD"];
-  UIScrollView *chipScroll = [[UIScrollView alloc] initWithFrame:CGRectZero];
-  chipScroll.showsHorizontalScrollIndicator = NO;
-  chipScroll.showsVerticalScrollIndicator = NO;
+  XPDrawnScrollView *chipScroll = [[XPDrawnScrollView alloc] initWithFrame:CGRectZero];
+  chipScroll.scrollsHorizontally = YES;
+  chipScroll.scrollsVertically = NO;
   [scrollView addSubview:chipScroll];
   XPOptionRow *chipRow = [[XPOptionRow alloc] init];
   chipRow.view = chipScroll;
@@ -264,7 +266,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   chipScroll.contentSize = CGSizeMake(MAX(1.0f, offset), 34.0f);
 
   [self addSectionWithTitle:@"INFORMACIÓN"];
-  UILabel *info = [[UILabel alloc] initWithFrame:CGRectZero];
+  XPDrawnLabel *info = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   info.font = XPFontCaption(11.5f);
   info.textColor = XPColorTextMuted();
   info.text = self.informationText.length > 0 ? self.informationText : @"Sin datos del flujo";

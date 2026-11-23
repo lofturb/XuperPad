@@ -2,9 +2,10 @@
 
 #import "XPDecoder.h"
 #import "XPTheme.h"
+#import "XPDrawnLabel.h"
 
 @interface XPSubtitleOverlay () {
-  UILabel *textLabel;
+  XPDrawnLabel *textLabel;
   XPSubtitleCue *cue;
   UIImage *bitmapImage;
 }
@@ -20,12 +21,13 @@
     self.opaque = NO;
     self.userInteractionEnabled = NO;
 
-    textLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    textLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     textLabel.font = XPFontMedium(15.0f);
     textLabel.textColor = [UIColor whiteColor];
     textLabel.textAlignment = NSTextAlignmentCenter;
     textLabel.numberOfLines = 0;
-    textLabel.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.62f];
+    textLabel.textInsets = UIEdgeInsetsMake(5.0f, 10.0f, 5.0f, 10.0f);
+    textLabel.layer.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.62f].CGColor;
     textLabel.layer.cornerRadius = 7.0f;
     textLabel.layer.masksToBounds = YES;
     textLabel.hidden = YES;
@@ -110,9 +112,12 @@
   }
   CGSize fitted = CGSizeZero;
   if (textLabel.text.length > 0) {
-    fitted = [textLabel.text sizeWithFont:textLabel.font
-                    constrainedToSize:CGSizeMake(maxWidth - 20.0f, 60.0f)
-                    lineBreakMode:NSLineBreakByWordWrapping];
+    NSDictionary *attributes = @{ NSFontAttributeName : textLabel.font };
+    CGRect box = [textLabel.text boundingRectWithSize:CGSizeMake(maxWidth - 20.0f, 60.0f)
+                                              options:NSStringDrawingUsesLineFragmentOrigin
+                                           attributes:attributes
+                                              context:nil];
+    fitted = box.size;
   }
   CGFloat boxWidth = MIN(maxWidth, fitted.width + 20.0f);
   CGFloat boxHeight = MAX(0.0f, fitted.height) + 10.0f;

@@ -279,13 +279,15 @@ static NSString *XPPlayerClockText(double seconds)
   return [NSString stringWithFormat:@"%02d:%02d", minutes, rest];
 }
 
+#import "XPDrawnLabel.h"
+
 @interface XPPlayerControls ()
 @property (nonatomic, strong) XPBackControl *backControl;
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *subtitleLabel;
-@property (nonatomic, strong) UILabel *liveLabel;
-@property (nonatomic, strong) UILabel *elapsedLabel;
-@property (nonatomic, strong) UILabel *durationLabel;
+@property (nonatomic, strong) XPDrawnLabel *titleLabel;
+@property (nonatomic, strong) XPDrawnLabel *subtitleLabel;
+@property (nonatomic, strong) XPDrawnLabel *liveLabel;
+@property (nonatomic, strong) XPDrawnLabel *elapsedLabel;
+@property (nonatomic, strong) XPDrawnLabel *durationLabel;
 @property (nonatomic, strong) XPPlayerProgressTrack *progressTrack;
 @property (nonatomic, strong) XPPlayerIconButton *previousButton;
 @property (nonatomic, strong) XPPlayerIconButton *playButton;
@@ -311,21 +313,21 @@ static NSString *XPPlayerClockText(double seconds)
     self.backControl.accessibilityLabel = @"Volver";
     [self addSubview:self.backControl];
 
-    self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.titleLabel.font = XPFontMedium(15.0f);
     self.titleLabel.textColor = XPColorTextPrimary();
     self.titleLabel.numberOfLines = 1;
     self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [self addSubview:self.titleLabel];
 
-    self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.subtitleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.subtitleLabel.font = XPFontCaption(11.5f);
     self.subtitleLabel.textColor = XPColorTextMuted();
     self.subtitleLabel.numberOfLines = 1;
     self.subtitleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [self addSubview:self.subtitleLabel];
 
-    self.liveLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.liveLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.liveLabel.font = XPFontCaption(10.5f);
     self.liveLabel.textColor = [UIColor whiteColor];
     self.liveLabel.textAlignment = NSTextAlignmentCenter;
@@ -336,13 +338,13 @@ static NSString *XPPlayerClockText(double seconds)
     self.liveLabel.hidden = YES;
     [self addSubview:self.liveLabel];
 
-    self.elapsedLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.elapsedLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.elapsedLabel.font = XPFontCaption(11.0f);
     self.elapsedLabel.textColor = XPColorTextMuted();
     self.elapsedLabel.text = @"00:00";
     [self addSubview:self.elapsedLabel];
 
-    self.durationLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.durationLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.durationLabel.font = XPFontCaption(11.0f);
     self.durationLabel.textColor = XPColorTextMuted();
     self.durationLabel.textAlignment = NSTextAlignmentRight;

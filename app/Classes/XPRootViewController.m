@@ -6,14 +6,15 @@
 #import "XPCatalogViewController.h"
 #import "XPTabBar.h"
 #import "XPTheme.h"
+#import "XPDrawnNavigationController.h"
 
 static const CGFloat XPRootTabBarHeight = 52.0f;
 
-@interface XPRootViewController () <UINavigationControllerDelegate>
+@interface XPRootViewController ()
 @property (nonatomic, strong) UIView *containerView;
 @property (nonatomic, strong) XPTabBar *tabBarView;
-@property (nonatomic, strong) UINavigationController *catalogNavigation;
-@property (nonatomic, strong) UINavigationController *liveNavigation;
+@property (nonatomic, strong) XPDrawnNavigationController *catalogNavigation;
+@property (nonatomic, strong) XPDrawnNavigationController *liveNavigation;
 @property (nonatomic, assign) NSUInteger selectedSection;
 @property (nonatomic, assign) BOOL tabBarVisible;
 @end
@@ -34,16 +35,12 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
 
   XPCatalogViewController *catalog = [[XPCatalogViewController alloc] init];
   catalog.screenTitle = @"Catálogo";
-  self.catalogNavigation = [[UINavigationController alloc] initWithRootViewController:catalog];
-  self.catalogNavigation.delegate = self;
-  [self.catalogNavigation setNavigationBarHidden:YES animated:NO];
+  self.catalogNavigation = [[XPDrawnNavigationController alloc] initWithRootViewController:catalog];
 
   XPCatalogViewController *live = [[XPCatalogViewController alloc] init];
   live.screenTitle = @"TV en vivo";
   live.showsLiveChannels = YES;
-  self.liveNavigation = [[UINavigationController alloc] initWithRootViewController:live];
-  self.liveNavigation.delegate = self;
-  [self.liveNavigation setNavigationBarHidden:YES animated:NO];
+  self.liveNavigation = [[XPDrawnNavigationController alloc] initWithRootViewController:live];
 
   [self addChildViewController:self.catalogNavigation];
   [self.containerView addSubview:self.catalogNavigation.view];
@@ -54,11 +51,18 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
   [self.liveNavigation didMoveToParentViewController:self];
   self.liveNavigation.view.hidden = YES;
 
+  __weak XPRootViewController *weakSelf = self;
+  self.catalogNavigation.stackChangeHandler = ^{
+    [weakSelf updateTabBarForVisibleStack];
+  };
+  self.liveNavigation.stackChangeHandler = ^{
+    [weakSelf updateTabBarForVisibleStack];
+  };
+
   self.tabBarView = [[XPTabBar alloc] initWithTitles:@[ @"Catálogo", @"TV en vivo" ]
                                                 icons:@[ @"grid", @"live" ]];
   [self.view addSubview:self.tabBarView];
 
-  __weak XPRootViewController *weakSelf = self;
   self.tabBarView.selectionHandler = ^(NSUInteger index) {
     [weakSelf selectSectionAtIndex:index];
   };
@@ -79,13 +83,32 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
   self.tabBarView.hidden = !self.tabBarVisible;
 }
 
+- (XPDrawnNavigationController *)visibleNavigation
+{
+  return (self.selectedSection == 0) ? self.catalogNavigation : self.liveNavigation;
+}
+
+- (void)updateTabBarForVisibleStack
+{
+  XPDrawnNavigationController *visible = [self visibleNavigation];
+  BOOL atRoot = visible.viewControllers.count <= 1;
+  if (atRoot == self.tabBarVisible) {
+    return;
+  }
+  self.tabBarVisible = atRoot;
+  [self.view setNeedsLayout];
+  [UIView animateWithDuration:0.22 animations:^{
+    [self.view layoutIfNeeded];
+  }];
+}
+
 - (void)selectSectionAtIndex:(NSUInteger)index
 {
   if (index > 1 || index == self.selectedSection) {
     return;
   }
-  UINavigationController *target = (index == 0) ? self.catalogNavigation : self.liveNavigation;
-  UINavigationController *other = (index == 0) ? self.liveNavigation : self.catalogNavigation;
+  XPDrawnNavigationController *target = (index == 0) ? self.catalogNavigation : self.liveNavigation;
+  XPDrawnNavigationController *other = (index == 0) ? self.liveNavigation : self.catalogNavigation;
 
   [other popToRootViewControllerAnimated:NO];
   self.selectedSection = index;
@@ -97,25 +120,6 @@ static const CGFloat XPRootTabBarHeight = 52.0f;
 
   if (target.viewControllers.count == 1) {
     return;
-  }
-}
-
-- (void)navigationController:(UINavigationController *)navigationController
-      willShowViewController:(UIViewController *)viewController
-                    animated:(BOOL)animated
-{
-  BOOL atRoot = navigationController.viewControllers.count <= 1;
-  if (atRoot == self.tabBarVisible) {
-    return;
-  }
-  self.tabBarVisible = atRoot;
-  [self.view setNeedsLayout];
-  if (animated) {
-    [UIView animateWithDuration:0.22 animations:^{
-      [self.view layoutIfNeeded];
-    }];
-  } else {
-    [self.view layoutIfNeeded];
   }
 }
 

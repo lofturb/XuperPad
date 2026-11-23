@@ -16,6 +16,8 @@
 #import "XPSubtitleOverlay.h"
 #import "XPPlayerControls.h"
 #import "XPTheme.h"
+#import "XPDrawnLabel.h"
+#import "XPDrawnNavigationController.h"
 
 #import <math.h>
 
@@ -39,7 +41,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 @property (nonatomic, strong) XPOptionsPanel *optionsPanel;
 @property (nonatomic, strong) XPSubtitleOverlay *subtitleOverlay;
 @property (nonatomic, strong) XPStatusView *statusView;
-@property (nonatomic, strong) UILabel *toastLabel;
+@property (nonatomic, strong) XPDrawnLabel *toastLabel;
 @property (nonatomic, assign) NSUInteger currentIndex;
 @property (nonatomic, strong) NSMutableArray *addressQueue;
 @property (nonatomic, assign) BOOL observing;
@@ -463,7 +465,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 
 - (void)closeTapped:(id)sender
 {
-  [self.navigationController popViewControllerAnimated:YES];
+  [[self xpNavigationController] popViewControllerAnimated:YES];
 }
 
 - (double)elapsedSeconds
@@ -861,11 +863,12 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 - (void)showTransientMessage:(NSString *)message
 {
   if (self.toastLabel == nil) {
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    XPDrawnLabel *label = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     label.font = XPFontCaption(11.5f);
     label.textColor = XPColorTextPrimary();
     label.textAlignment = NSTextAlignmentCenter;
     label.numberOfLines = 1;
+    label.textInsets = UIEdgeInsetsMake(0.0f, 14.0f, 0.0f, 14.0f);
     label.backgroundColor = [XPColorSurfaceAlt() colorWithAlphaComponent:0.95f];
     label.layer.cornerRadius = 15.0f;
     label.layer.masksToBounds = YES;

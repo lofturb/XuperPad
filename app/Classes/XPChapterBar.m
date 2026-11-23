@@ -3,12 +3,14 @@
 #import "XPButton.h"
 #import "XPChipButton.h"
 #import "XPTheme.h"
+#import "XPDrawnLabel.h"
+#import "XPDrawnScrollView.h"
 
 @interface XPChapterBar ()
-@property (nonatomic, strong) UILabel *positionLabel;
+@property (nonatomic, strong) XPDrawnLabel *positionLabel;
 @property (nonatomic, strong) XPButton *previousButton;
 @property (nonatomic, strong) XPButton *nextButton;
-@property (nonatomic, strong) UIScrollView *scrollView;
+@property (nonatomic, strong) XPDrawnScrollView *scrollView;
 @property (nonatomic, strong) NSMutableArray *chipButtons;
 @end
 
@@ -31,7 +33,7 @@
                    forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:self.previousButton];
 
-    self.positionLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.positionLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.positionLabel.font = XPFontCaption(11.5f);
     self.positionLabel.textColor = XPColorTextPrimary();
     self.positionLabel.textAlignment = NSTextAlignmentCenter;
@@ -45,10 +47,9 @@
                forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:self.nextButton];
 
-    self.scrollView = [[UIScrollView alloc] initWithFrame:CGRectZero];
-    self.scrollView.showsHorizontalScrollIndicator = NO;
-    self.scrollView.showsVerticalScrollIndicator = NO;
-    self.scrollView.alwaysBounceHorizontal = YES;
+    self.scrollView = [[XPDrawnScrollView alloc] initWithFrame:CGRectZero];
+    self.scrollView.scrollsHorizontally = YES;
+    self.scrollView.scrollsVertically = NO;
     [self addSubview:self.scrollView];
 
     self.currentIndex = 0;

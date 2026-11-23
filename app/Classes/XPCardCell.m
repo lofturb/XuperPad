@@ -5,6 +5,8 @@
 #import "XPCardCell.h"
 #import "XPTheme.h"
 #import "XPImageCache.h"
+#import "XPDrawnImageView.h"
+#import "XPDrawnLabel.h"
 
 @interface XPCardShadeView : UIView
 @end
@@ -28,10 +30,10 @@
 @end
 
 @interface XPCardCell ()
-@property (nonatomic, strong) UIImageView *posterView;
+@property (nonatomic, strong) XPDrawnImageView *posterView;
 @property (nonatomic, strong) XPCardShadeView *shadeView;
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *badgeLabel;
+@property (nonatomic, strong) XPDrawnLabel *titleLabel;
+@property (nonatomic, strong) XPDrawnLabel *badgeLabel;
 @property (nonatomic, copy) NSString *posterAddress;
 @end
 
@@ -44,11 +46,10 @@
     self.backgroundColor = [UIColor clearColor];
     self.contentView.backgroundColor = [UIColor clearColor];
 
-    self.posterView = [[UIImageView alloc] initWithFrame:CGRectZero];
-    self.posterView.contentMode = UIViewContentModeScaleAspectFill;
-    self.posterView.clipsToBounds = YES;
-    self.posterView.backgroundColor = XPColorSurface();
-    self.posterView.layer.cornerRadius = 8.0f;
+    self.posterView = [[XPDrawnImageView alloc] initWithFrame:CGRectZero];
+    self.posterView.imageMode = XPDrawnImageModeFill;
+    self.posterView.cornerRadius = 8.0f;
+    self.posterView.fillColor = XPColorSurface();
     [self.contentView addSubview:self.posterView];
 
     self.shadeView = [[XPCardShadeView alloc] initWithFrame:CGRectZero];
@@ -56,17 +57,17 @@
     self.shadeView.userInteractionEnabled = NO;
     [self.contentView addSubview:self.shadeView];
 
-    self.badgeLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.badgeLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.badgeLabel.font = [UIFont systemFontOfSize:7.5f weight:UIFontWeightBold];
     self.badgeLabel.textColor = [UIColor whiteColor];
     self.badgeLabel.textAlignment = NSTextAlignmentCenter;
-    self.badgeLabel.backgroundColor = XPColorAccent();
+    self.badgeLabel.layer.backgroundColor = XPColorAccent().CGColor;
     self.badgeLabel.layer.cornerRadius = 3.0f;
     self.badgeLabel.layer.masksToBounds = YES;
     self.badgeLabel.hidden = YES;
     [self.contentView addSubview:self.badgeLabel];
 
-    self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.titleLabel.font = XPFontCaption(10.5f);
     self.titleLabel.textColor = XPColorTextPrimary();
     self.titleLabel.numberOfLines = 2;
@@ -79,8 +80,8 @@
 - (void)layoutSubviews
 {
   [super layoutSubviews];
-  CGFloat width = CGRectGetWidth(self.contentView.bounds);
-  CGFloat height = CGRectGetHeight(self.contentView.bounds);
+  CGFloat width = CGRectGetWidth(self.bounds);
+  CGFloat height = CGRectGetHeight(self.bounds);
   CGFloat textHeight = 32.0f;
   CGFloat posterHeight = MAX(40.0f, height - textHeight);
 

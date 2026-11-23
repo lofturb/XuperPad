@@ -25,6 +25,13 @@ XuperPad_FILES = main.m \
 	Classes/XPStreamResolver.m \
 	Classes/XPTheme.m \
 	Classes/XPImageCache.m \
+	Classes/XPDrawnLabel.m \
+	Classes/XPDrawnImageView.m \
+	Classes/XPDrawnScrollView.m \
+	Classes/XPDrawnTextField.m \
+	Classes/XPDrawnCollectionViewCell.m \
+	Classes/XPDrawnCollectionView.m \
+	Classes/XPDrawnNavigationController.m \
 	Classes/XPButton.m \
 	Classes/XPChipButton.m \
 	Classes/XPSearchField.m \

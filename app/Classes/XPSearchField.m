@@ -4,6 +4,7 @@
 
 #import "XPSearchField.h"
 #import "XPTheme.h"
+#import "XPDrawnTextField.h"
 
 @interface XPSearchClearControl : UIControl
 @end
@@ -39,8 +40,8 @@
 
 @end
 
-@interface XPSearchField ()
-@property (nonatomic, strong) UITextField *textField;
+@interface XPSearchField () <XPDrawnTextFieldDelegate>
+@property (nonatomic, strong) XPDrawnTextField *textField;
 @property (nonatomic, strong) XPSearchClearControl *clearControl;
 @end
 
@@ -54,25 +55,16 @@
     self.opaque = NO;
     self.contentMode = UIViewContentModeRedraw;
 
-    self.textField = [[UITextField alloc] initWithFrame:CGRectZero];
-    self.textField.borderStyle = UITextBorderStyleNone;
+    self.textField = [[XPDrawnTextField alloc] initWithFrame:CGRectZero];
     self.textField.backgroundColor = [UIColor clearColor];
     self.textField.font = XPFontBody(13.0f);
     self.textField.textColor = XPColorTextPrimary();
-    self.textField.tintColor = XPColorAccent();
+    self.textField.caretColor = XPColorAccent();
+    self.textField.hintText = hint ?: @"";
     self.textField.returnKeyType = UIReturnKeySearch;
     self.textField.autocorrectionType = UITextAutocorrectionTypeNo;
     self.textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    self.textField.clearButtonMode = UITextFieldViewModeNever;
-    self.textField.attributedPlaceholder =
-        [[NSAttributedString alloc] initWithString:hint ?: @""
-                                        attributes:@{ NSForegroundColorAttributeName : XPColorTextMuted() }];
-    [self.textField addTarget:self
-                        action:@selector(textDidChange:)
-              forControlEvents:UIControlEventEditingChanged];
-    [self.textField addTarget:self
-                        action:@selector(searchRequested:)
-              forControlEvents:UIControlEventEditingDidEndOnExit];
+    self.textField.fieldDelegate = self;
     [self addSubview:self.textField];
 
     self.clearControl = [[XPSearchClearControl alloc] initWithFrame:CGRectZero];
@@ -135,13 +127,13 @@
   [circle stroke];
 }
 
-- (void)textDidChange:(UITextField *)field
+- (void)drawnTextFieldDidChange:(XPDrawnTextField *)field
 {
   self.clearControl.hidden = field.text.length == 0;
   [self setNeedsLayout];
 }
 
-- (void)searchRequested:(UITextField *)field
+- (void)drawnTextFieldDidReturn:(XPDrawnTextField *)field
 {
   [field resignFirstResponder];
   NSString *text = [field.text stringByTrimmingCharactersInSet:

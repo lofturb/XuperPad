@@ -11,14 +11,18 @@
 #import "XPStatusView.h"
 #import "XPImageCache.h"
 #import "XPBackControl.h"
+#import "XPDrawnLabel.h"
+#import "XPDrawnImageView.h"
+#import "XPDrawnScrollView.h"
+#import "XPDrawnNavigationController.h"
 
 @interface XPEpisodeRow : UIView
 @property (nonatomic, copy) void (^selectionHandler)(void);
 @property (nonatomic, strong) NSString *episodeName;
 @property (nonatomic, copy) NSString *episodeNumber;
 @property (nonatomic, copy) NSString *episodeDuration;
-@property (nonatomic, strong) UILabel *nameLabel;
-@property (nonatomic, strong) UILabel *durationLabel;
+@property (nonatomic, strong) XPDrawnLabel *nameLabel;
+@property (nonatomic, strong) XPDrawnLabel *durationLabel;
 @end
 
 @implementation XPEpisodeRow
@@ -31,14 +35,14 @@
     self.opaque = NO;
     self.contentMode = UIViewContentModeRedraw;
 
-    self.nameLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.nameLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.nameLabel.font = XPFontBody(12.5f);
     self.nameLabel.textColor = XPColorTextPrimary();
     self.nameLabel.numberOfLines = 1;
     self.nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [self addSubview:self.nameLabel];
 
-    self.durationLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.durationLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.durationLabel.font = XPFontCaption(10.5f);
     self.durationLabel.textColor = XPColorTextMuted();
     self.durationLabel.textAlignment = NSTextAlignmentRight;
@@ -123,14 +127,14 @@
 @property (nonatomic, strong) NSDictionary *catalogTitle;
 @property (nonatomic, strong) NSDictionary *detailInfo;
 @property (nonatomic, strong) NSMutableArray *episodes;
-@property (nonatomic, strong) UIScrollView *scrollView;
+@property (nonatomic, strong) XPDrawnScrollView *scrollView;
 @property (nonatomic, strong) UIView *contentView;
-@property (nonatomic, strong) UIImageView *backdropView;
-@property (nonatomic, strong) UIImageView *posterView;
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *metaLabel;
-@property (nonatomic, strong) UILabel *summaryLabel;
-@property (nonatomic, strong) UILabel *episodesTitleLabel;
+@property (nonatomic, strong) XPDrawnImageView *backdropView;
+@property (nonatomic, strong) XPDrawnImageView *posterView;
+@property (nonatomic, strong) XPDrawnLabel *titleLabel;
+@property (nonatomic, strong) XPDrawnLabel *metaLabel;
+@property (nonatomic, strong) XPDrawnLabel *summaryLabel;
+@property (nonatomic, strong) XPDrawnLabel *episodesTitleLabel;
 @property (nonatomic, strong) XPButton *playButton;
 @property (nonatomic, strong) XPStatusView *statusView;
 @property (nonatomic, strong) XPBackControl *backControl;
@@ -162,44 +166,42 @@
 
 - (void)buildInterface
 {
-  self.scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+  self.scrollView = [[XPDrawnScrollView alloc] initWithFrame:self.view.bounds];
   self.scrollView.backgroundColor = [UIColor clearColor];
-  self.scrollView.showsVerticalScrollIndicator = NO;
-  self.scrollView.alwaysBounceVertical = YES;
+  self.scrollView.scrollsVertically = YES;
+  self.scrollView.scrollsHorizontally = NO;
   [self.view addSubview:self.scrollView];
 
   self.contentView = [[UIView alloc] initWithFrame:CGRectZero];
   [self.scrollView addSubview:self.contentView];
 
-  self.backdropView = [[UIImageView alloc] initWithFrame:CGRectZero];
-  self.backdropView.contentMode = UIViewContentModeScaleAspectFill;
-  self.backdropView.clipsToBounds = YES;
-  self.backdropView.backgroundColor = XPColorSurface();
+  self.backdropView = [[XPDrawnImageView alloc] initWithFrame:CGRectZero];
+  self.backdropView.imageMode = XPDrawnImageModeFill;
+  self.backdropView.fillColor = XPColorSurface();
   [self.contentView addSubview:self.backdropView];
 
-  self.posterView = [[UIImageView alloc] initWithFrame:CGRectZero];
-  self.posterView.contentMode = UIViewContentModeScaleAspectFill;
-  self.posterView.clipsToBounds = YES;
-  self.posterView.backgroundColor = XPColorSurface();
-  self.posterView.layer.cornerRadius = 8.0f;
-  self.posterView.layer.borderWidth = 1.0f;
-  self.posterView.layer.borderColor = [XPColorDivider() CGColor];
+  self.posterView = [[XPDrawnImageView alloc] initWithFrame:CGRectZero];
+  self.posterView.imageMode = XPDrawnImageModeFill;
+  self.posterView.fillColor = XPColorSurface();
+  self.posterView.cornerRadius = 8.0f;
+  self.posterView.borderWidth = 1.0f;
+  self.posterView.borderColor = XPColorDivider();
   [self.contentView addSubview:self.posterView];
 
-  self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+  self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.titleLabel.font = XPFontDisplay(16.0f);
   self.titleLabel.textColor = XPColorTextPrimary();
   self.titleLabel.numberOfLines = 3;
   self.titleLabel.text = self.catalogTitle[@"name"];
   [self.contentView addSubview:self.titleLabel];
 
-  self.metaLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+  self.metaLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.metaLabel.font = XPFontCaption(11.0f);
   self.metaLabel.textColor = XPColorAccent();
   self.metaLabel.numberOfLines = 1;
   [self.contentView addSubview:self.metaLabel];
 
-  self.summaryLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+  self.summaryLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.summaryLabel.font = XPFontBody(12.5f);
   self.summaryLabel.textColor = XPColorTextMuted();
   self.summaryLabel.numberOfLines = 0;
@@ -213,7 +215,7 @@
              forControlEvents:UIControlEventTouchUpInside];
   [self.contentView addSubview:self.playButton];
 
-  self.episodesTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+  self.episodesTitleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.episodesTitleLabel.font = XPFontMedium(13.0f);
   self.episodesTitleLabel.textColor = XPColorTextPrimary();
   self.episodesTitleLabel.text = @"Episodios";
@@ -346,7 +348,7 @@
   [self loadImageForAddress:detail[@"poster"] intoView:self.posterView];
 }
 
-- (void)loadImageForAddress:(NSString *)address intoView:(UIImageView *)view
+- (void)loadImageForAddress:(NSString *)address intoView:(XPDrawnImageView *)view
 {
   if (address.length == 0) {
     return;
@@ -356,7 +358,7 @@
     view.image = cached;
     return;
   }
-  __weak UIImageView *weakView = view;
+  __weak XPDrawnImageView *weakView = view;
   [[XPImageCache sharedCache] loadImageForAddress:address
                                        completion:^(UIImage *image) {
     if (image != nil) {
@@ -446,13 +448,13 @@
     player.chapters = chapters;
     player.currentChapterIndex = chapterIndex;
 
-    [weakSelf.navigationController pushViewController:player animated:YES];
+    [[weakSelf xpNavigationController] pushViewController:player animated:YES];
   }];
 }
 
 - (void)closeTapped:(id)sender
 {
-  [self.navigationController popViewControllerAnimated:YES];
+  [[self xpNavigationController] popViewControllerAnimated:YES];
 }
 
 @end

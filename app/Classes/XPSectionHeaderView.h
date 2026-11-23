@@ -4,7 +4,7 @@
 
 #import <UIKit/UIKit.h>
 
-@interface XPSectionHeaderView : UICollectionReusableView
+@interface XPSectionHeaderView : UIView
 
 - (void)applyTitle:(NSString *)title count:(NSUInteger)count;
 

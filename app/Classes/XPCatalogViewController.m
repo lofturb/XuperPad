@@ -14,18 +14,21 @@
 #import "XPSearchField.h"
 #import "XPChipButton.h"
 #import "XPStatusView.h"
+#import "XPDrawnLabel.h"
+#import "XPDrawnScrollView.h"
+#import "XPDrawnCollectionView.h"
+#import "XPDrawnNavigationController.h"
 
 static NSString *const XPCellIdentifier = @"XPCardCell";
 static NSString *const XPSectionIdentifier = @"XPSectionHeader";
 
-@interface XPCatalogViewController () <UICollectionViewDataSource, UICollectionViewDelegate>
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *brandLabel;
+@interface XPCatalogViewController () <XPDrawnCollectionViewDataSource, XPDrawnCollectionViewDelegate>
+@property (nonatomic, strong) XPDrawnLabel *titleLabel;
+@property (nonatomic, strong) XPDrawnLabel *brandLabel;
 @property (nonatomic, strong) XPSearchField *searchField;
-@property (nonatomic, strong) UIScrollView *chipsScrollView;
+@property (nonatomic, strong) XPDrawnScrollView *chipsScrollView;
 @property (nonatomic, strong) NSMutableArray *chipButtons;
-@property (nonatomic, strong) UICollectionView *collectionView;
-@property (nonatomic, strong) UICollectionViewFlowLayout *collectionLayout;
+@property (nonatomic, strong) XPDrawnCollectionView *collectionView;
 @property (nonatomic, strong) XPStatusView *statusView;
 @property (nonatomic, strong) NSMutableArray *sections;
 @property (nonatomic, copy) NSString *activeColumnCode;
@@ -61,13 +64,13 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
 
 - (void)buildInterface
 {
-  self.brandLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+  self.brandLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.brandLabel.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
   self.brandLabel.textColor = XPColorAccent();
   self.brandLabel.text = @"XUPER TV";
   [self.view addSubview:self.brandLabel];
 
-  self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+  self.titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.titleLabel.font = XPFontDisplay(19.0f);
   self.titleLabel.textColor = XPColorTextPrimary();
   self.titleLabel.text = self.screenTitle ?: @"Catálogo";
@@ -85,31 +88,22 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
     [self.view addSubview:self.searchField];
   }
 
-  self.chipsScrollView = [[UIScrollView alloc] initWithFrame:CGRectZero];
-  self.chipsScrollView.showsHorizontalScrollIndicator = NO;
-  self.chipsScrollView.showsVerticalScrollIndicator = NO;
+  self.chipsScrollView = [[XPDrawnScrollView alloc] initWithFrame:CGRectZero];
+  self.chipsScrollView.scrollsHorizontally = YES;
+  self.chipsScrollView.scrollsVertically = NO;
   self.chipsScrollView.backgroundColor = [UIColor clearColor];
   [self.view addSubview:self.chipsScrollView];
 
-  self.collectionLayout = [[UICollectionViewFlowLayout alloc] init];
-  self.collectionLayout.minimumInteritemSpacing = 8.0f;
-  self.collectionLayout.minimumLineSpacing = 14.0f;
-  self.collectionLayout.sectionInset = UIEdgeInsetsMake(4.0f, 12.0f, 18.0f, 12.0f);
-  self.collectionLayout.headerReferenceSize = CGSizeMake(CGRectGetWidth(self.view.bounds), 26.0f);
-
-  self.collectionView = [[UICollectionView alloc]
-      initWithFrame:self.view.bounds
-      collectionViewLayout:self.collectionLayout];
+  self.collectionView = [[XPDrawnCollectionView alloc] initWithFrame:self.view.bounds];
   self.collectionView.backgroundColor = [UIColor clearColor];
   self.collectionView.dataSource = self;
   self.collectionView.delegate = self;
-  self.collectionView.alwaysBounceVertical = YES;
-  self.collectionView.showsVerticalScrollIndicator = NO;
-  [self.collectionView registerClass:[XPCardCell class]
-          forCellWithReuseIdentifier:XPCellIdentifier];
-  [self.collectionView registerClass:[XPSectionHeaderView class]
-          forSupplementaryViewOfKind:UICollectionElementKindSectionHeader
-                 withReuseIdentifier:XPSectionIdentifier];
+  self.collectionView.itemAspect = 1.45f;
+  [self.collectionView registerCellClass:[XPCardCell class]
+                     forReuseIdentifier:XPCellIdentifier];
+  [self.collectionView registerSupplementaryClass:[XPSectionHeaderView class]
+                                   forElementKind:UICollectionElementKindSectionHeader
+                               withReuseIdentifier:XPSectionIdentifier];
   [self.view addSubview:self.collectionView];
 
   self.statusView = [[XPStatusView alloc] initWithFrame:self.view.bounds];
@@ -167,10 +161,11 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
     itemWidth = 40.0f;
   }
   CGFloat itemHeight = floor(itemWidth * 1.5f) + 32.0f;
-  if (fabs(self.collectionLayout.itemSize.width - itemWidth) > 0.5f ||
-      fabs(self.collectionLayout.itemSize.height - itemHeight) > 0.5f) {
-    self.collectionLayout.itemSize = CGSizeMake(itemWidth, itemHeight);
-    [self.collectionLayout invalidateLayout];
+  if (fabs(self.collectionView.itemSize.width - itemWidth) > 0.5f ||
+      fabs(self.collectionView.itemSize.height - itemHeight) > 0.5f ||
+      self.collectionView.columns != (NSInteger)columns) {
+    self.collectionView.columns = (NSInteger)columns;
+    self.collectionView.itemSize = CGSizeMake(itemWidth, itemHeight);
   }
 }
 
@@ -511,8 +506,8 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   }
 
   [[XPPortalClient sharedClient] fetchSectionsForColumn:self.activeColumnCode
-                                                   page:nextPage
-                                             completion:^(NSArray *sections, NSError *error) {
+                                                    page:nextPage
+                                              completion:^(NSArray *sections, NSError *error) {
     weakSelf.loadingMore = NO;
     if (error != nil || sections.count == 0) {
       return;
@@ -523,14 +518,14 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   }];
 }
 
-#pragma mark - UICollectionViewDataSource
+#pragma mark - XPDrawnCollectionViewDataSource
 
-- (NSInteger)numberOfSectionsInCollectionView:(UICollectionView *)collectionView
+- (NSInteger)numberOfSectionsInCollectionView:(XPDrawnCollectionView *)collectionView
 {
   return (NSInteger)self.sections.count;
 }
 
-- (NSInteger)collectionView:(UICollectionView *)collectionView
+- (NSInteger)collectionView:(XPDrawnCollectionView *)collectionView
      numberOfItemsInSection:(NSInteger)section
 {
   if (section < 0 || (NSUInteger)section >= self.sections.count) {
@@ -543,35 +538,25 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   return (NSInteger)items.count;
 }
 
-- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView
-                  cellForItemAtIndexPath:(NSIndexPath *)indexPath
+- (XPDrawnCollectionViewCell *)collectionView:(XPDrawnCollectionView *)collectionView
+                        cellForItemAtIndexPath:(NSIndexPath *)indexPath
 {
-  XPCardCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:XPCellIdentifier
-                                                                forIndexPath:indexPath];
+  XPCardCell *cell = (XPCardCell *)[collectionView
+      dequeueReusableCellWithReuseIdentifier:XPCellIdentifier
+                                forIndexPath:indexPath];
   NSArray *items = self.sections[(NSUInteger)indexPath.section][@"items"];
   if ((NSUInteger)indexPath.item < items.count) {
     [cell applyTitle:items[(NSUInteger)indexPath.item]];
   }
+  if ((NSInteger)items.count - indexPath.item <= 4) {
+    [self loadNextPage];
+  }
   return cell;
 }
 
-- (UICollectionReusableView *)collectionView:(UICollectionView *)collectionView
-           viewForSupplementaryElementOfKind:(NSString *)kind
-                                 atIndexPath:(NSIndexPath *)indexPath
-{
-  XPSectionHeaderView *header =
-      [collectionView dequeueReusableSupplementaryViewOfKind:kind
-                                         withReuseIdentifier:XPSectionIdentifier
-                                                forIndexPath:indexPath];
-  NSArray *items = self.sections[(NSUInteger)indexPath.section][@"items"];
-  NSString *name = self.sections[(NSUInteger)indexPath.section][@"name"];
-  [header applyTitle:name count:[items isKindOfClass:[NSArray class]] ? items.count : 0];
-  return header;
-}
+#pragma mark - XPDrawnCollectionViewDelegate
 
-#pragma mark - UICollectionViewDelegate
-
-- (void)collectionView:(UICollectionView *)collectionView
+- (void)collectionView:(XPDrawnCollectionView *)collectionView
   didSelectItemAtIndexPath:(NSIndexPath *)indexPath
 {
   if ((NSUInteger)indexPath.section >= self.sections.count) {
@@ -590,17 +575,24 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
 
   XPDetailViewController *detail =
       [[XPDetailViewController alloc] initWithTitle:item];
-  [self.navigationController pushViewController:detail animated:YES];
+  [[self xpNavigationController] pushViewController:detail animated:YES];
 }
 
-- (void)collectionView:(UICollectionView *)collectionView
-  willDisplayCell:(UICollectionViewCell *)cell
-forItemAtIndexPath:(NSIndexPath *)indexPath
+- (UIView *)collectionView:(XPDrawnCollectionView *)collectionView
+    viewForSupplementaryElementOfKind:(NSString *)kind
+                          atIndexPath:(NSIndexPath *)indexPath
 {
-  NSInteger total = [collectionView numberOfItemsInSection:indexPath.section];
-  if (indexPath.item >= total - 4) {
-    [self loadNextPage];
+  XPSectionHeaderView *header = (XPSectionHeaderView *)[collectionView
+      dequeueReusableSupplementaryViewOfKind:kind
+                         withReuseIdentifier:XPSectionIdentifier
+                                forIndexPath:indexPath];
+  if (indexPath.section < 0 || (NSUInteger)indexPath.section >= self.sections.count) {
+    return header;
   }
+  NSArray *items = self.sections[(NSUInteger)indexPath.section][@"items"];
+  NSString *name = self.sections[(NSUInteger)indexPath.section][@"name"];
+  [header applyTitle:name count:[items isKindOfClass:[NSArray class]] ? items.count : 0];
+  return header;
 }
 
 - (void)openLiveChannel:(NSDictionary *)item
@@ -620,7 +612,7 @@ forItemAtIndexPath:(NSIndexPath *)indexPath
     }
     [weakSelf.statusView hideStatus];
     XPPlayerViewController *player = [XPPlayerViewController playerWithStream:stream];
-    [weakSelf.navigationController pushViewController:player animated:YES];
+    [[weakSelf xpNavigationController] pushViewController:player animated:YES];
   }];
 }
 

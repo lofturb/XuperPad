@@ -5,6 +5,7 @@
 #import "XPStatusView.h"
 #import "XPTheme.h"
 #import "XPButton.h"
+#import "XPDrawnLabel.h"
 
 static const double XPPiValue = 3.14159265358979323846;
 
@@ -83,7 +84,7 @@ static const double XPPiValue = 3.14159265358979323846;
 
 @interface XPStatusView ()
 @property (nonatomic, strong) XPRingView *ringView;
-@property (nonatomic, strong) UILabel *messageLabel;
+@property (nonatomic, strong) XPDrawnLabel *messageLabel;
 @property (nonatomic, strong) XPButton *retryButton;
 @end
 
@@ -99,7 +100,7 @@ static const double XPPiValue = 3.14159265358979323846;
     self.ringView = [[XPRingView alloc] initWithFrame:CGRectZero];
     [self addSubview:self.ringView];
 
-    self.messageLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.messageLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.messageLabel.font = XPFontBody(13.0f);
     self.messageLabel.textColor = XPColorTextMuted();
     self.messageLabel.textAlignment = NSTextAlignmentCenter;
