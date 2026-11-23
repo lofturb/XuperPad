@@ -62,6 +62,8 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 @property (nonatomic, copy) NSArray *displayQualityTracks;
 @property (nonatomic, assign) double pendingResumeTime;
 @property (nonatomic, assign) BOOL hasPendingResume;
+@property (nonatomic, assign) float seekHoldProgress;
+@property (nonatomic, assign) NSTimeInterval seekHoldUntil;
 @end
 
 @implementation XPPlayerViewController
@@ -276,6 +278,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 {
   [self stopPlayback];
   self.playbackFinished = NO;
+  self.seekHoldUntil = 0;
   if (self.currentIndex >= self.addressQueue.count) {
     [self.statusView showMessage:@"No se pudo reproducir el contenido." retry:YES];
     return;
@@ -549,6 +552,8 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
     return;
   }
   double target = total * (double)MAX(0.0f, MIN(1.0f, fraction));
+  self.seekHoldProgress = MAX(0.0f, MIN(1.0f, fraction));
+  self.seekHoldUntil = [[NSDate date] timeIntervalSince1970] + 1.2;
   if (self.decoder != nil) {
     if (![self.decoder seekToTime:target]) {
       [self showTransientMessage:@"No se pudo buscar en este contenido"];
@@ -813,11 +818,16 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 {
   double elapsed = [self elapsedSeconds];
   double total = [self totalSeconds];
-  self.controls.elapsedTime = elapsed;
+  if (!self.controls.isScrubbing) {
+    self.controls.elapsedTime = elapsed;
+  }
   self.controls.duration = total;
   float progress = 0.0f;
   if (total > 0.0) {
     progress = (float)(elapsed / total);
+  }
+  if (self.seekHoldUntil > [[NSDate date] timeIntervalSince1970]) {
+    progress = self.seekHoldProgress;
   }
   self.controls.progress = MAX(0.0f, MIN(1.0f, progress));
   self.controls.playing = !self.userPaused;

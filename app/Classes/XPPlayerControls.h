@@ -18,6 +18,7 @@ typedef NS_ENUM(NSInteger, XPPlayerControlIcon) {
 @property (nonatomic, assign) float progress;
 @property (nonatomic, assign, getter=isPlaying) BOOL playing;
 @property (nonatomic, assign) BOOL liveStream;
+@property (nonatomic, assign, readonly, getter=isScrubbing) BOOL scrubbing;
 
 @property (nonatomic, copy) void (^closeHandler)(void);
 @property (nonatomic, copy) void (^playPauseHandler)(void);

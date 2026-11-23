@@ -155,6 +155,8 @@
 
 @interface XPPlayerProgressTrack : UIView
 @property (nonatomic, assign) float progress;
+@property (nonatomic, assign, readonly) BOOL scrubbing;
+@property (nonatomic, copy) void (^scrubHandler)(float fraction, BOOL final);
 @property (nonatomic, copy) void (^seekHandler)(float fraction);
 @end
 
@@ -174,8 +176,22 @@
 
 - (void)setProgress:(float)progress
 {
+  if (_scrubbing) {
+    return;
+  }
+  [self updateProgress:progress];
+}
+
+- (void)updateProgress:(float)progress
+{
   _progress = MAX(0.0f, MIN(1.0f, progress));
   [self setNeedsDisplay];
+}
+
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event
+{
+  CGRect area = CGRectInset(self.bounds, 0.0f, -10.0f);
+  return CGRectContainsPoint(area, point);
 }
 
 - (CGRect)trackRect
@@ -212,12 +228,13 @@
   }
   if (self.progress > 0.001f) {
     CGFloat knobX = CGRectGetMinX(track) + played;
-    CGRect knob = CGRectMake(knobX - 5.0f,
-                              CGRectGetMidY(track) - 5.0f,
-                              10.0f,
-                              10.0f);
+    CGFloat knobSide = self.scrubbing ? 14.0f : 10.0f;
+    CGRect knob = CGRectMake(knobX - knobSide / 2.0f,
+                              CGRectGetMidY(track) - knobSide / 2.0f,
+                              knobSide,
+                              knobSide);
     [[UIColor colorWithWhite:1.0f alpha:0.92f] setFill];
-    [XPRoundedPath(knob, 5.0f) fill];
+    [XPRoundedPath(knob, knobSide / 2.0f) fill];
   }
 }
 
@@ -237,7 +254,12 @@
   if (touch == nil) {
     return;
   }
-  self.progress = [self fractionAtPoint:[touch locationInView:self]];
+  _scrubbing = YES;
+  float fraction = [self fractionAtPoint:[touch locationInView:self]];
+  [self updateProgress:fraction];
+  if (self.scrubHandler != nil) {
+    self.scrubHandler(fraction, NO);
+  }
 }
 
 - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event
@@ -246,19 +268,32 @@
   if (touch == nil) {
     return;
   }
-  self.progress = [self fractionAtPoint:[touch locationInView:self]];
+  float fraction = [self fractionAtPoint:[touch locationInView:self]];
+  [self updateProgress:fraction];
+  if (self.scrubHandler != nil) {
+    self.scrubHandler(fraction, NO);
+  }
 }
 
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
 {
   UITouch *touch = touches.anyObject;
-  if (touch == nil) {
-    return;
+  float fraction = touch ? [self fractionAtPoint:[touch locationInView:self]] : _progress;
+  [self updateProgress:fraction];
+  _scrubbing = NO;
+  if (self.scrubHandler != nil) {
+    self.scrubHandler(fraction, YES);
   }
-  float fraction = [self fractionAtPoint:[touch locationInView:self]];
-  self.progress = fraction;
   if (self.seekHandler != nil) {
     self.seekHandler(fraction);
+  }
+}
+
+- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
+{
+  _scrubbing = NO;
+  if (self.scrubHandler != nil) {
+    self.scrubHandler(_progress, YES);
   }
 }
 
@@ -359,6 +394,15 @@ static NSString *XPPlayerClockText(double seconds)
         strongSelf.seekHandler(fraction);
       }
     };
+    self.progressTrack.scrubHandler = ^(float fraction, BOOL final) {
+      XPPlayerControls *strongSelf = weakSelf;
+      if (strongSelf == nil) {
+        return;
+      }
+      if (strongSelf.duration > 0.0) {
+        strongSelf.elapsedLabel.text = XPPlayerClockText((double)fraction * strongSelf.duration);
+      }
+    };
     self.progressTrack.accessibilityLabel = @"Progreso";
     [self addSubview:self.progressTrack];
 
@@ -439,6 +483,11 @@ static NSString *XPPlayerClockText(double seconds)
   self.progressTrack.progress = _progress;
 }
 
+- (BOOL)isScrubbing
+{
+  return self.progressTrack.scrubbing;
+}
+
 - (void)setPlaying:(BOOL)playing
 {
   _playing = playing;
@@ -475,9 +524,9 @@ static NSString *XPPlayerClockText(double seconds)
   CGFloat trackLeft = margin + 54.0f;
   CGFloat trackRight = width - margin - 54.0f;
   self.progressTrack.frame = CGRectMake(trackLeft,
-                                        timesY - 5.0f,
+                                        timesY - 9.0f,
                                         MAX(30.0f, trackRight - trackLeft),
-                                        24.0f);
+                                        32.0f);
 
   CGFloat rowY = height - 48.0f;
   self.previousButton.frame = CGRectMake(margin, rowY, 38.0f, 38.0f);
