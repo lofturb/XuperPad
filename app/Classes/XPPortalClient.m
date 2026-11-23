@@ -61,7 +61,7 @@ static NSUInteger const XPPortalMaxAttempts = 2;
       parameters:(NSDictionary *)parameters
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
-  [self callPath:path parameters:parameters identityOnly:NO attempt:0 completion:completion];
+  [self callPath:path parameters:parameters identityOnly:NO attempt:0 hostOffset:0 completion:completion];
 }
 
 - (void)callPath:(NSString *)path
@@ -69,13 +69,28 @@ static NSUInteger const XPPortalMaxAttempts = 2;
     identityOnly:(BOOL)identityOnly
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
-  [self callPath:path parameters:parameters identityOnly:identityOnly attempt:0 completion:completion];
+  [self callPath:path parameters:parameters identityOnly:identityOnly attempt:0 hostOffset:0 completion:completion];
+}
+
+- (NSArray *)portalHostsStartingAt:(NSUInteger)offset
+{
+  NSArray *all = XPPortalHosts();
+  if (all.count == 0) {
+    return all;
+  }
+  NSUInteger start = offset % all.count;
+  NSMutableArray *rotated = [NSMutableArray arrayWithCapacity:all.count];
+  for (NSUInteger i = 0; i < all.count; i++) {
+    [rotated addObject:all[(start + i) % all.count]];
+  }
+  return rotated;
 }
 
 - (void)callPath:(NSString *)path
       parameters:(NSDictionary *)parameters
     identityOnly:(BOOL)identityOnly
          attempt:(NSUInteger)attempt
+      hostOffset:(NSUInteger)hostOffset
        completion:(void (^)(NSDictionary *response, NSError *error))completion
 {
   [[XPSession sharedSession] ensureSessionWithCompletion:^(NSDictionary *sessionInfo, NSError *sessionError) {
@@ -118,7 +133,7 @@ static NSUInteger const XPPortalMaxAttempts = 2;
                                @"spkgVer" : XPClientPackageVersion,
                                @"Content-Type" : @"application/json;charset=utf-8" };
 
-    [XPTransport postToPortalHosts:XPPortalHosts()
+    [XPTransport postToPortalHosts:[self portalHostsStartingAt:hostOffset]
                               path:path
                            headers:headers
                               body:[encodedBody dataUsingEncoding:NSUTF8StringEncoding]
@@ -150,14 +165,21 @@ static NSUInteger const XPPortalMaxAttempts = 2;
           NSLog(@"[XuperPad] portal %@ sesion muerta (%@), se renueva y se reintenta",
                 path, returnCode);
           [[XPSession sharedSession] invalidateSharedSeed];
-          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt + 1 completion:completion];
+          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt + 1 hostOffset:hostOffset completion:completion];
           return;
         }
         if (canRetry && [returnCode isEqualToString:XPGeoBlockedErrorCode]) {
           NSLog(@"[XuperPad] portal %@ bloqueo geografico (%@), se reintenta",
                 path, returnCode);
           [[XPSession sharedSession] invalidateSharedSeed];
-          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt + 1 completion:completion];
+          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt + 1 hostOffset:hostOffset completion:completion];
+          return;
+        }
+        if ([returnCode isEqualToString:XPVersionRejectedErrorCode] &&
+            (hostOffset + 1) < XPPortalHosts().count) {
+          NSLog(@"[XuperPad] portal %@ version retirada (%@) en host %lu, se prueba el siguiente host",
+                path, returnCode, (unsigned long)hostOffset);
+          [self callPath:path parameters:parameters identityOnly:identityOnly attempt:attempt hostOffset:hostOffset + 1 completion:completion];
           return;
         }
         if (completion != nil) {
@@ -266,8 +288,6 @@ static NSUInteger const XPPortalMaxAttempts = 2;
 
 - (void)searchTitles:(NSString *)text
                  page:(NSUInteger)page
-                 path:(NSString *)path
-             fallback:(NSString *)fallback
            completion:(XPTitleListCompletion)completion
 {
   NSDictionary *parameters = @{ @"value" : text ?: @"",
@@ -276,17 +296,11 @@ static NSUInteger const XPPortalMaxAttempts = 2;
                                 @"filter" : @"",
                                 @"pageNum" : @(page),
                                 @"pageSize" : @50 };
-  [self callPath:path
+  [self callPath:@"v3/searchByName"
        parameters:parameters
      identityOnly:YES
        completion:^(NSDictionary *response, NSError *error) {
     if (response == nil) {
-      NSString *code = error.userInfo[@"portalCode"];
-      if (fallback.length > 0 && [code isEqualToString:XPVersionRejectedErrorCode]) {
-        NSLog(@"[XuperPad] busqueda %@ rechazada (%@), se prueba %@", path, code, fallback);
-        [self searchTitles:text page:page path:fallback fallback:nil completion:completion];
-        return;
-      }
       if (completion != nil) {
         completion(nil, error);
       }
@@ -296,13 +310,6 @@ static NSUInteger const XPPortalMaxAttempts = 2;
       completion([XPPortalParser titlesFromSearchResponse:response], nil);
     }
   }];
-}
-
-- (void)searchTitles:(NSString *)text
-                 page:(NSUInteger)page
-           completion:(XPTitleListCompletion)completion
-{
-  [self searchTitles:text page:page path:@"liveSearchByName" fallback:@"v3/searchByName" completion:completion];
 }
 
 - (void)fetchDetailForTitle:(NSString *)contentId
