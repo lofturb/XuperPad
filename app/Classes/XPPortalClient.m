@@ -266,6 +266,8 @@ static NSUInteger const XPPortalMaxAttempts = 2;
 
 - (void)searchTitles:(NSString *)text
                  page:(NSUInteger)page
+                 path:(NSString *)path
+             fallback:(NSString *)fallback
            completion:(XPTitleListCompletion)completion
 {
   NSDictionary *parameters = @{ @"value" : text ?: @"",
@@ -274,11 +276,17 @@ static NSUInteger const XPPortalMaxAttempts = 2;
                                 @"filter" : @"",
                                 @"pageNum" : @(page),
                                 @"pageSize" : @50 };
-  [self callPath:@"v3/searchByName"
+  [self callPath:path
        parameters:parameters
      identityOnly:YES
        completion:^(NSDictionary *response, NSError *error) {
     if (response == nil) {
+      NSString *code = error.userInfo[@"portalCode"];
+      if (fallback.length > 0 && [code isEqualToString:XPVersionRejectedErrorCode]) {
+        NSLog(@"[XuperPad] busqueda %@ rechazada (%@), se prueba %@", path, code, fallback);
+        [self searchTitles:text page:page path:fallback fallback:nil completion:completion];
+        return;
+      }
       if (completion != nil) {
         completion(nil, error);
       }
@@ -288,6 +296,13 @@ static NSUInteger const XPPortalMaxAttempts = 2;
       completion([XPPortalParser titlesFromSearchResponse:response], nil);
     }
   }];
+}
+
+- (void)searchTitles:(NSString *)text
+                 page:(NSUInteger)page
+           completion:(XPTitleListCompletion)completion
+{
+  [self searchTitles:text page:page path:@"liveSearchByName" fallback:@"v3/searchByName" completion:completion];
 }
 
 - (void)fetchDetailForTitle:(NSString *)contentId
