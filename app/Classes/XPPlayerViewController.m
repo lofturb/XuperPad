@@ -269,9 +269,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 - (void)viewWillDisappear:(BOOL)animated
 {
   [super viewWillDisappear:animated];
-  if (self.isMovingFromParentViewController) {
-    [self stopPlayback];
-  }
+  [self stopPlayback];
 }
 
 - (void)startPlayback
