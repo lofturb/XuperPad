@@ -2424,13 +2424,7 @@ lastCopySeconds = 0;
     hasVideoStart = YES;
     videoStartPTS = frame.pts;
     videoWall = CFAbsoluteTimeGetCurrent();
-    double master = 0.0;
-    if (hasAudioStart) {
-      master = audioStartPTS + audioOffset;
-    } else {
-      master = videoStartPTS;
-    }
-    videoMasterOffset = master - frame.pts;
+    videoMasterOffset = 0.0;
   }
   [clockLock unlock];
   [frameCondition lock];
