@@ -15,14 +15,56 @@
 #import "XPDrawnImageView.h"
 #import "XPDrawnScrollView.h"
 #import "XPDrawnNavigationController.h"
+#import "XPStore.h"
+
+@interface XPEpisodeBadgeView : UIView
+@property (nonatomic, copy) NSString *text;
+@end
+
+@implementation XPEpisodeBadgeView
+
+- (void)setText:(NSString *)text
+{
+  _text = [text copy];
+  [self setNeedsDisplay];
+}
+
+- (void)drawRect:(CGRect)rect
+{
+  CGContextRef context = UIGraphicsGetCurrentContext();
+  if (context == NULL) {
+    return;
+  }
+  [[XPColorSurfaceAlt() colorWithAlphaComponent:0.92f] setFill];
+  [XPRoundedPath(self.bounds, CGRectGetHeight(self.bounds) / 2.0f) fill];
+
+  NSString *text = self.text ?: @"";
+  NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+  style.alignment = NSTextAlignmentCenter;
+  NSDictionary *attributes = @{ NSFontAttributeName : XPFontCaption(10.5f),
+                                NSForegroundColorAttributeName : XPColorAccent(),
+                                NSParagraphStyleAttributeName : style };
+  CGSize fitted = [text sizeWithAttributes:attributes];
+  [text drawInRect:CGRectMake(0,
+                              (CGRectGetHeight(self.bounds) - fitted.height) / 2.0f,
+                              CGRectGetWidth(self.bounds),
+                              fitted.height)
+      withAttributes:attributes];
+}
+
+@end
 
 @interface XPEpisodeRow : UIView
 @property (nonatomic, copy) void (^selectionHandler)(void);
-@property (nonatomic, strong) NSString *episodeName;
+@property (nonatomic, copy) NSString *episodeName;
 @property (nonatomic, copy) NSString *episodeNumber;
 @property (nonatomic, copy) NSString *episodeDuration;
+@property (nonatomic, copy) NSString *imageAddress;
+@property (nonatomic, strong) XPDrawnImageView *thumbView;
+@property (nonatomic, strong) XPEpisodeBadgeView *badgeView;
 @property (nonatomic, strong) XPDrawnLabel *nameLabel;
 @property (nonatomic, strong) XPDrawnLabel *durationLabel;
+@property (nonatomic, assign) BOOL rowHighlighted;
 @end
 
 @implementation XPEpisodeRow
@@ -35,17 +77,30 @@
     self.opaque = NO;
     self.contentMode = UIViewContentModeRedraw;
 
+    self.thumbView = [[XPDrawnImageView alloc] initWithFrame:CGRectZero];
+    self.thumbView.imageMode = XPDrawnImageModeFill;
+    self.thumbView.fillColor = XPColorSurfaceAlt();
+    self.thumbView.cornerRadius = 6.0f;
+    self.thumbView.borderWidth = 1.0f;
+    self.thumbView.borderColor = [UIColor colorWithWhite:1.0f alpha:0.08f];
+    [self addSubview:self.thumbView];
+
+    self.badgeView = [[XPEpisodeBadgeView alloc] initWithFrame:CGRectZero];
+    self.badgeView.backgroundColor = [UIColor clearColor];
+    self.badgeView.opaque = NO;
+    self.badgeView.userInteractionEnabled = NO;
+    [self.thumbView addSubview:self.badgeView];
+
     self.nameLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
-    self.nameLabel.font = XPFontBody(12.5f);
+    self.nameLabel.font = XPFontBody(13.0f);
     self.nameLabel.textColor = XPColorTextPrimary();
-    self.nameLabel.numberOfLines = 1;
+    self.nameLabel.numberOfLines = 2;
     self.nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [self addSubview:self.nameLabel];
 
     self.durationLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     self.durationLabel.font = XPFontCaption(10.5f);
     self.durationLabel.textColor = XPColorTextMuted();
-    self.durationLabel.textAlignment = NSTextAlignmentRight;
     self.durationLabel.numberOfLines = 1;
     [self addSubview:self.durationLabel];
   }
@@ -57,14 +112,18 @@
   [super layoutSubviews];
   CGFloat width = CGRectGetWidth(self.bounds);
   CGFloat height = CGRectGetHeight(self.bounds);
-  CGFloat durationWidth = 46.0f;
-  self.nameLabel.frame = CGRectMake(46.0f, (height - 16.0f) / 2.0f,
-                                    MAX(20.0f, width - 46.0f - durationWidth - 16.0f),
-                                    16.0f);
-  self.durationLabel.frame = CGRectMake(width - durationWidth - 12.0f,
-                                        (height - 14.0f) / 2.0f,
-                                        durationWidth,
-                                        14.0f);
+  CGFloat thumbWidth = 84.0f;
+  CGFloat thumbHeight = 48.0f;
+  CGFloat thumbLeft = 14.0f;
+  CGFloat thumbTop = (height - thumbHeight) / 2.0f;
+  self.thumbView.frame = CGRectMake(thumbLeft, thumbTop, thumbWidth, thumbHeight);
+  self.badgeView.frame = CGRectMake(4.0f, thumbHeight - 22.0f, 24.0f, 18.0f);
+
+  CGFloat textLeft = thumbLeft + thumbWidth + 12.0f;
+  CGFloat textWidth = MAX(40.0f, width - textLeft - 14.0f);
+  self.nameLabel.frame = CGRectMake(textLeft, thumbTop + 4.0f, textWidth, 34.0f);
+  self.durationLabel.frame = CGRectMake(textLeft, thumbTop + thumbHeight - 18.0f,
+                                        textWidth, 14.0f);
 }
 
 - (void)drawRect:(CGRect)rect
@@ -73,27 +132,37 @@
   if (context == NULL) {
     return;
   }
-  CGFloat badgeSide = 26.0f;
-  CGRect badge = CGRectMake(12.0f,
-                            (CGRectGetHeight(self.bounds) - badgeSide) / 2.0f,
-                            badgeSide,
-                            badgeSide);
-  [[XPColorSurfaceAlt() colorWithAlphaComponent:0.95f] setFill];
-  [XPRoundedPath(badge, badgeSide / 2.0f) fill];
+  CGRect card = CGRectInset(self.bounds, 8.0f, 3.0f);
+  CGFloat alpha = self.rowHighlighted ? 0.95f : 0.55f;
+  [[XPColorSurfaceAlt() colorWithAlphaComponent:alpha] setFill];
+  [XPRoundedPath(card, 12.0f) fill];
+}
 
-  NSString *number = self.episodeNumber ?: @"";
-  NSDictionary *attributes = @{ NSFontAttributeName : XPFontCaption(11.0f),
-                                NSForegroundColorAttributeName : XPColorAccent() };
-  NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
-  style.alignment = NSTextAlignmentCenter;
-  NSMutableDictionary *finalAttributes = [attributes mutableCopy];
-  [finalAttributes setObject:style forKey:NSParagraphStyleAttributeName];
-  CGSize fitted = [number sizeWithAttributes:finalAttributes];
-  [number drawInRect:CGRectMake(CGRectGetMinX(badge),
-                                CGRectGetMidY(badge) - fitted.height / 2.0f,
-                                badgeSide,
-                                fitted.height)
-      withAttributes:finalAttributes];
+- (void)setRowHighlighted:(BOOL)rowHighlighted
+{
+  _rowHighlighted = rowHighlighted;
+  self.alpha = rowHighlighted ? 0.7f : 1.0f;
+  [self setNeedsDisplay];
+}
+
+- (void)setImageAddress:(NSString *)imageAddress
+{
+  _imageAddress = [imageAddress copy];
+  if (_imageAddress.length == 0) {
+    return;
+  }
+  __weak XPEpisodeRow *weakSelf = self;
+  UIImage *cached = [[XPImageCache sharedCache] imageForAddress:_imageAddress];
+  if (cached != nil) {
+    self.thumbView.image = cached;
+    return;
+  }
+  [[XPImageCache sharedCache] loadImageForAddress:_imageAddress
+                                       completion:^(UIImage *image) {
+    if (image != nil) {
+      weakSelf.thumbView.image = image;
+    }
+  }];
 }
 
 - (void)setEpisodeName:(NSString *)episodeName
@@ -105,7 +174,7 @@
 - (void)setEpisodeNumber:(NSString *)episodeNumber
 {
   _episodeNumber = [episodeNumber copy];
-  [self setNeedsDisplay];
+  self.badgeView.text = _episodeNumber ?: @"";
 }
 
 - (void)setEpisodeDuration:(NSString *)episodeDuration
@@ -114,8 +183,19 @@
   self.durationLabel.text = _episodeDuration ?: @"";
 }
 
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
+{
+  self.rowHighlighted = YES;
+}
+
+- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
+{
+  self.rowHighlighted = NO;
+}
+
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
 {
+  self.rowHighlighted = NO;
   if (self.selectionHandler != nil) {
     self.selectionHandler();
   }
@@ -136,9 +216,16 @@
 @property (nonatomic, strong) XPDrawnLabel *summaryLabel;
 @property (nonatomic, strong) XPDrawnLabel *episodesTitleLabel;
 @property (nonatomic, strong) XPButton *playButton;
+@property (nonatomic, strong) XPButton *favoriteButton;
 @property (nonatomic, strong) XPStatusView *statusView;
 @property (nonatomic, strong) XPBackControl *backControl;
 @property (nonatomic, strong) NSMutableArray *episodeRows;
+@end
+
+@interface XPDetailViewController ()
+- (NSString *)storeId;
+- (void)updateFavoriteButton;
+- (void)playEpisode:(NSDictionary *)episode resume:(double)resume;
 @end
 
 @implementation XPDetailViewController
@@ -227,6 +314,13 @@
               forControlEvents:UIControlEventTouchUpInside];
   [self.view addSubview:self.backControl];
 
+  self.favoriteButton = [[XPButton alloc] initWithTitle:@"Mi lista"
+                                                   style:XPButtonStyleGhost];
+  [self.favoriteButton addTarget:self
+                          action:@selector(toggleFavorite:)
+                forControlEvents:UIControlEventTouchUpInside];
+  [self.view addSubview:self.favoriteButton];
+
   self.statusView = [[XPStatusView alloc] initWithFrame:self.view.bounds];
   self.statusView.backgroundColor = [UIColor clearColor];
   __weak XPDetailViewController *weakSelf = self;
@@ -246,6 +340,11 @@
 
   self.scrollView.frame = CGRectMake(0, 0, width, height);
   self.backControl.frame = CGRectMake(12.0f, top + 6.0f, 34.0f, 34.0f);
+  CGFloat favoriteWidth = 104.0f;
+  self.favoriteButton.frame = CGRectMake(width - favoriteWidth - 12.0f,
+                                         top + 6.0f,
+                                         favoriteWidth,
+                                         34.0f);
   self.statusView.frame = CGRectMake(0, top + 44.0f, width, MAX(60.0f, height - top - 44.0f));
 
   CGFloat backdropHeight = 168.0f + top;
@@ -275,8 +374,8 @@
   cursor += 24.0f;
 
   for (XPEpisodeRow *row in self.episodeRows) {
-    row.frame = CGRectMake(0, cursor, width, 44.0f);
-    cursor += 44.0f;
+    row.frame = CGRectMake(0, cursor, width, 66.0f);
+    cursor += 66.0f;
   }
   cursor += 20.0f;
 
@@ -346,6 +445,48 @@
 
   [self loadImageForAddress:detail[@"backdrop"] intoView:self.backdropView];
   [self loadImageForAddress:detail[@"poster"] intoView:self.posterView];
+
+  [self updateFavoriteButton];
+  NSDictionary *history = [[XPStore sharedStore] historyEntryForId:[self storeId]];
+  if (history != nil && [history[@"position"] doubleValue] > 1.0) {
+    self.playButton.buttonTitle = @"Continuar";
+  }
+}
+
+- (NSString *)storeId
+{
+  NSString *identifier = self.catalogTitle[@"id"];
+  if (identifier.length == 0) {
+    identifier = self.detailInfo[@"id"];
+  }
+  return identifier ?: @"";
+}
+
+- (void)updateFavoriteButton
+{
+  BOOL favorite = [[XPStore sharedStore] isFavoriteWithId:[self storeId]];
+  self.favoriteButton.buttonTitle = favorite ? @"En mi lista" : @"Mi lista";
+}
+
+- (void)toggleFavorite:(id)sender
+{
+  NSString *identifier = [self storeId];
+  if (identifier.length == 0) {
+    return;
+  }
+  BOOL series = [self.catalogTitle[@"series"] boolValue];
+  if (self.detailInfo[@"series"] != nil) {
+    series = [self.detailInfo[@"series"] boolValue];
+  }
+  NSMutableDictionary *favorite = [NSMutableDictionary dictionary];
+  favorite[@"id"] = identifier;
+  favorite[@"name"] = self.detailInfo[@"name"] ?: self.catalogTitle[@"name"] ?: @"";
+  favorite[@"poster"] = self.detailInfo[@"poster"] ?: self.catalogTitle[@"poster"] ?: @"";
+  favorite[@"backdrop"] = self.detailInfo[@"backdrop"] ?: self.catalogTitle[@"backdrop"] ?: @"";
+  favorite[@"series"] = @(series);
+  favorite[@"kind"] = self.detailInfo[@"kind"] ?: (series ? @"serie" : @"pelA-cula");
+  [[XPStore sharedStore] toggleFavoriteWithTitle:favorite];
+  [self updateFavoriteButton];
 }
 
 - (void)loadImageForAddress:(NSString *)address intoView:(XPDrawnImageView *)view
@@ -374,19 +515,30 @@
   }
   [self.episodeRows removeAllObjects];
 
+  NSDictionary *history = [[XPStore sharedStore] historyEntryForId:[self storeId]];
+  NSInteger historyChapter = [history[@"chapterIndex"] integerValue];
+  double historyPosition = [history[@"position"] doubleValue];
+  NSString *fallbackImage = self.detailInfo[@"poster"] ?: self.catalogTitle[@"poster"];
+
+  NSInteger index = -1;
   for (id episode in self.episodes) {
     if (![episode isKindOfClass:[NSDictionary class]]) {
       continue;
     }
+    index++;
     NSDictionary *entry = (NSDictionary *)episode;
     XPEpisodeRow *row = [[XPEpisodeRow alloc] initWithFrame:CGRectZero];
     row.episodeName = entry[@"name"];
     row.episodeNumber = [NSString stringWithFormat:@"%@", entry[@"number"] ?: @0];
     NSString *duration = entry[@"duration"];
     row.episodeDuration = duration ?: @"";
+    NSString *image = entry[@"image"];
+    row.imageAddress = image.length > 0 ? image : (fallbackImage ?: @"");
+    BOOL resumable = (history != nil && historyChapter == index && historyPosition > 1.0);
+    double resume = resumable ? historyPosition : 0.0;
     __weak XPDetailViewController *weakSelf = self;
     row.selectionHandler = ^{
-      [weakSelf playEpisode:entry];
+      [weakSelf playEpisode:entry resume:resume];
     };
     [self.contentView addSubview:row];
     [self.episodeRows addObject:row];
@@ -397,15 +549,33 @@
 
 - (void)playPrimaryEpisode:(id)sender
 {
+  NSDictionary *history = [[XPStore sharedStore] historyEntryForId:[self storeId]];
+  NSInteger chapterIndex = history != nil ? [history[@"chapterIndex"] integerValue] : 0;
+  double position = history != nil ? [history[@"position"] doubleValue] : 0.0;
+
   if (self.episodes.count > 0) {
-    [self playEpisode:self.episodes.firstObject];
+    if (chapterIndex < 0 || chapterIndex >= (NSInteger)self.episodes.count) {
+      chapterIndex = 0;
+    }
+    id episode = self.episodes[(NSUInteger)chapterIndex];
+    if (![episode isKindOfClass:[NSDictionary class]]) {
+      episode = self.episodes.firstObject;
+      position = 0.0;
+    }
+    [self playEpisode:episode resume:position];
     return;
   }
   [self playEpisode:@{ @"id" : self.catalogTitle[@"id"] ?: @"",
-                        @"name" : self.catalogTitle[@"name"] ?: @"" }];
+                        @"name" : self.catalogTitle[@"name"] ?: @"" }
+             resume:position];
 }
 
 - (void)playEpisode:(NSDictionary *)episode
+{
+  [self playEpisode:episode resume:0.0];
+}
+
+- (void)playEpisode:(NSDictionary *)episode resume:(double)resume
 {
   NSString *episodeId = episode[@"id"];
   if (episodeId.length == 0) {
@@ -430,6 +600,10 @@
     XPPlayerViewController *player = [XPPlayerViewController playerWithStream:stream];
     player.seriesId = seriesId;
     player.seriesName = titleName;
+    player.contentId = episodeId;
+    player.posterAddress = weakSelf.detailInfo[@"poster"] ?: weakSelf.catalogTitle[@"poster"];
+    player.backdropAddress = weakSelf.detailInfo[@"backdrop"] ?: weakSelf.catalogTitle[@"backdrop"];
+    player.startPosition = resume;
 
     NSArray *chapters = [weakSelf.episodes copy] ?: @[];
     NSInteger chapterIndex = 0;

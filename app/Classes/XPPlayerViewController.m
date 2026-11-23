@@ -65,6 +65,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 @property (nonatomic, assign) BOOL hasPendingResume;
 @property (nonatomic, assign) float seekHoldProgress;
 @property (nonatomic, assign) NSTimeInterval seekHoldUntil;
+@property (nonatomic, assign) NSTimeInterval lastProgressRecord;
 @end
 
 @implementation XPPlayerViewController
@@ -273,9 +274,35 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
                                      30.0f);
 }
 
+- (void)recordProgress
+{
+  NSString *key = self.seriesId.length > 0 ? self.seriesId : self.contentId;
+  if (key.length == 0) {
+    return;
+  }
+  double position = [self elapsedSeconds];
+  double duration = [self totalSeconds];
+  if (position <= 1.0 || duration <= 0.0) {
+    return;
+  }
+  NSString *name = self.seriesName.length > 0 ? self.seriesName : self.titleText;
+  BOOL isSeries = self.chapters.count > 1;
+  [[XPStore sharedStore] recordPlaybackWithId:key
+                                         name:(name ?: @"")
+                                     isSeries:isSeries
+                                       poster:self.posterAddress
+                                     backdrop:self.backdropAddress
+                                     chapters:self.chapters
+                              currentChapter:self.currentChapterIndex
+                                    position:position
+                                    duration:duration];
+  self.lastProgressRecord = [[NSDate date] timeIntervalSince1970];
+}
+
 - (void)viewWillDisappear:(BOOL)animated
 {
   [super viewWillDisappear:animated];
+  [self recordProgress];
   [self stopPlayback];
 }
 
@@ -460,11 +487,12 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
     self.startTimeout = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
       [self.statusView hideStatus];
-      if (self.hasPendingResume) {
-        CMTime resumeTime = CMTimeMakeWithSeconds(self.pendingResumeTime, 600);
-        [self.player seekToTime:resumeTime];
-        self.hasPendingResume = NO;
+      double resume = self.hasPendingResume ? self.pendingResumeTime : self.startPosition;
+      if (resume > 1.0) {
+        [self.player seekToTime:CMTimeMakeWithSeconds(resume, 600)];
       }
+      self.hasPendingResume = NO;
+      self.startPosition = 0;
     });
   } else if (player.status == AVPlayerStatusFailed) {
     [self currentIndexDidFail];
@@ -628,6 +656,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   [self cancelAutomaticChapter];
   self.playbackFinished = NO;
   self.hasPendingResume = NO;
+  self.startPosition = 0;
   id item = self.chapters[index];
   if (![item isKindOfClass:[NSDictionary class]]) {
     return;
@@ -856,6 +885,11 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   }
   self.controls.progress = MAX(0.0f, MIN(1.0f, progress));
   self.controls.playing = !self.userPaused;
+
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  if (now - self.lastProgressRecord >= 5.0) {
+    [self recordProgress];
+  }
 
   if (!self.controls.hidden && !self.chapterBarVisible && !self.optionsPanelVisible
       && self.lastInteraction != nil) {
@@ -1091,10 +1125,12 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   [self.startTimeout invalidate];
   self.startTimeout = nil;
   [self.statusView hideStatus];
-  if (self.hasPendingResume) {
-    [self.decoder seekToTime:self.pendingResumeTime];
-    self.hasPendingResume = NO;
+  double resume = self.hasPendingResume ? self.pendingResumeTime : self.startPosition;
+  if (resume > 1.0) {
+    [self.decoder seekToTime:resume];
   }
+  self.hasPendingResume = NO;
+  self.startPosition = 0;
 }
 
 - (void)decoder:(XPDecoder *)decoder didProduceVideoFrame:(XPVideoFrameData *)frame

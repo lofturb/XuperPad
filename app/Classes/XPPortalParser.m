@@ -359,11 +359,19 @@
       }
       NSString *episodeDuration = [self textValue:entry[@"duration"]] ?: @"";
       NSString *episodeQuality = [self textValue:entry[@"quality"]] ?: @"";
+      NSString *episodeImage = [self backdropFromAsset:entry];
+      if (episodeImage.length == 0) {
+        episodeImage = [self landscapeFromAsset:entry];
+      }
+      if (episodeImage.length == 0) {
+        episodeImage = [self posterFromAsset:entry];
+      }
       [episodes addObject:@{ @"id" : episodeId,
                              @"name" : episodeName,
                              @"number" : @(position),
                              @"duration" : episodeDuration,
-                             @"quality" : episodeQuality }];
+                             @"quality" : episodeQuality,
+                             @"image" : episodeImage ?: @"" }];
     }
   }
   detail[@"episodes"] = episodes;

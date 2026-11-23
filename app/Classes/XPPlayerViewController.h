@@ -32,6 +32,9 @@
 /// Identificador de la serie a la que pertenece el capitulo.
 @property (nonatomic, copy) NSString *seriesId;
 
+/// Identificador del capitulo o titulo en reproduccion.
+@property (nonatomic, copy) NSString *contentId;
+
 /// Nombre de la serie a la que pertenece el capitulo.
 @property (nonatomic, copy) NSString *seriesName;
 
@@ -40,6 +43,15 @@
 
 /// Indice del capitulo que se esta reproduciendo.
 @property (nonatomic, assign) NSInteger currentChapterIndex;
+
+/// Caratula del titulo para el historial.
+@property (nonatomic, copy) NSString *posterAddress;
+
+/// Imagen de fondo del titulo para el historial.
+@property (nonatomic, copy) NSString *backdropAddress;
+
+/// Segundo desde el que debe empezar la reproduccion.
+@property (nonatomic, assign) double startPosition;
 
 /// Crea el reproductor con los datos de una direccion resuelta.
 + (instancetype)playerWithStream:(NSDictionary *)stream;
