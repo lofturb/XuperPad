@@ -267,6 +267,13 @@ clone_tag() {
 clone_tag "https://github.com/FFmpeg/FFmpeg.git" "$FFMPEG_TAG" "$WORK/ffmpeg"
 clone_tag "https://github.com/Mbed-TLS/mbedtls.git" "$MBEDTLS_TAG" "$WORK/mbedtls"
 
+log "Aplicando optimizacion: omitir boundary strengths cuando se salta el deblocking"
+HEVCDEC="$WORK/ffmpeg/libavcodec/hevcdec.c"
+perl -0pi -e 's/if \(!s->sh\.disable_deblocking_filter_flag\)/if (!s->sh.disable_deblocking_filter_flag \&\& s->avctx->skip_loop_filter < AVDISCARD_ALL)/g' "$HEVCDEC"
+BS_GUARDS="$(grep -c 'skip_loop_filter < AVDISCARD_ALL' "$HEVCDEC" || true)"
+[ "$BS_GUARDS" = 4 ] || fail "El parche de boundary strengths aplico $BS_GUARDS de 4 sitios"
+log "Parche aplicado en $BS_GUARDS sitios"
+
 log "Compilando mbedTLS"
 MBED_MAKE_ARGS=(CC="$CC" AR="$AR" CFLAGS="$CFLAGS_TARGET" LDFLAGS="$LDFLAGS_TARGET")
 if [ -n "$RANLIB" ]; then
