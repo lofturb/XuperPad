@@ -132,6 +132,19 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
                            title:(NSString *)titleName
                        completion:(XPStreamCompletion)completion
 {
+  [self resolveOnDemandForTitle:contentId
+                       seriesId:seriesId
+                          title:titleName
+                     trackIndex:-1
+                     completion:completion];
+}
+
++ (void)resolveOnDemandForTitle:(NSString *)contentId
+                        seriesId:(NSString *)seriesId
+                           title:(NSString *)titleName
+                      trackIndex:(NSInteger)trackIndex
+                      completion:(XPStreamCompletion)completion
+{
   XPPortalClient *client = [XPPortalClient sharedClient];
   NSDictionary *parameters = @{ @"contentId" : contentId ?: @"",
                                 @"seriesContentId" : seriesId ?: @"",
@@ -180,8 +193,19 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
       return;
     }
 
-    NSDictionary *track = [self preferredTrackFrom:tracks];
-    NSString *license = licenses.firstObject;
+    NSUInteger chosenIndex = 0;
+    if (trackIndex >= 0 && (NSUInteger)trackIndex < tracks.count) {
+      chosenIndex = (NSUInteger)trackIndex;
+    } else {
+      NSDictionary *preferred = [self preferredTrackFrom:tracks];
+      NSUInteger found = [tracks indexOfObjectIdenticalTo:preferred];
+      if (found != NSNotFound) {
+        chosenIndex = found;
+      }
+    }
+    NSDictionary *track = tracks[chosenIndex];
+    NSString *trackLicense = track[@"license"];
+    NSString *license = trackLicense.length > 0 ? trackLicense : licenses.firstObject;
     NSString *trackId = track[@"id"];
     NSString *format = [track[@"format"] isEqualToString:@"ts"] ? @"ts" : @"mp4";
     NSString *codec = [track[@"codec"] isKindOfClass:[NSString class]] ? track[@"codec"] : @"h264";
@@ -250,6 +274,29 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
             (unsigned long)streams.count,
             (unsigned long)backups.count);
       NSLog(@"[XuperPad] vod url %@", primary[@"url"]);
+      NSMutableArray *trackList = [NSMutableArray array];
+      for (NSUInteger index = 0; index < tracks.count; index++) {
+        id item = tracks[index];
+        if (![item isKindOfClass:[NSDictionary class]]) {
+          continue;
+        }
+        NSDictionary *entry = (NSDictionary *)item;
+        NSInteger entryHeight = [entry[@"height"] integerValue];
+        NSString *entryCodec = [entry[@"codec"] isKindOfClass:[NSString class]]
+          ? [(NSString *)entry[@"codec"] uppercaseString]
+          : @"";
+        NSString *resolution = entryHeight > 0
+          ? [NSString stringWithFormat:@"%ldp", (long)entryHeight]
+          : @"Auto";
+        NSString *label = entryCodec.length > 0
+          ? [NSString stringWithFormat:@"%@ - %@", resolution, entryCodec]
+          : resolution;
+        [trackList addObject:@{ @"index" : @(index),
+                                @"title" : label,
+                                @"height" : @(entryHeight),
+                                @"codec" : entry[@"codec"] ?: @"",
+                                @"format" : entry[@"format"] ?: @"" }];
+      }
       if (completion != nil) {
         completion(@{ @"url" : primary[@"url"],
                       @"backupUrls" : backups,
@@ -257,7 +304,10 @@ static NSString *const XPStreamErrorDomain = @"XPStreamResolver";
                       @"mime" : mime,
                       @"codec" : codec,
                       @"format" : format,
-                      @"title" : titleName ?: @"" }, nil);
+                      @"title" : titleName ?: @"",
+                      @"contentId" : contentId ?: @"",
+                      @"tracks" : trackList,
+                      @"selectedTrackIndex" : @(chosenIndex) }, nil);
       }
     }];
   }];

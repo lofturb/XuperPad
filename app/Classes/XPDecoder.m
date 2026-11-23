@@ -210,11 +210,11 @@ static NSString *XPFFmpegErrorText(int code)
   return [NSString stringWithUTF8String:buffer] ?: @"desconocido";
 }
 
-static const NSUInteger XPVideoQueueLimit = 6;
-static const NSUInteger XPVideoPacketLimit = 240;
-static const double XPDemuxLeadSeconds = 0.50;
-static const double XPVideoLeadSeconds = 0.30;
-static const double XPAudioQueueTargetSeconds = 0.75;
+static const NSUInteger XPVideoQueueLimit = 24;
+static const NSUInteger XPVideoPacketLimit = 320;
+static const double XPDemuxLeadSeconds = 1.80;
+static const double XPVideoLeadSeconds = 0.95;
+static const double XPAudioQueueTargetSeconds = 1.00;
 static const double XPVideoDiscontinuitySeconds = 1.00;
 static const double XPVideoKeyframeWaitLimit = 8.00;
 
@@ -826,6 +826,12 @@ lastCopySeconds = 0;
 {
   while (running) {
     @autoreleasepool {
+      while (running && [self isPaused]) {
+        [NSThread sleepForTimeInterval:0.02];
+      }
+      if (!running) {
+        break;
+      }
       XPQueuedPacket *item = [self takeVideoPacket];
       if (item == nil) {
         continue;

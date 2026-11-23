@@ -32,6 +32,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   NSMutableArray *rows;
   NSMutableArray *audioButtons;
   NSMutableArray *subtitleButtons;
+  NSMutableArray *qualityButtons;
   NSMutableArray *rateChips;
 }
 @end
@@ -49,6 +50,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
     rows = [NSMutableArray array];
     audioButtons = [NSMutableArray array];
     subtitleButtons = [NSMutableArray array];
+    qualityButtons = [NSMutableArray array];
     rateChips = [NSMutableArray array];
 
     titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
@@ -70,6 +72,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 
     self.selectedAudioIndex = -1;
     self.selectedSubtitleIndex = -1;
+    self.selectedQualityIndex = -1;
     self.playbackRate = 1.0f;
   }
   return self;
@@ -85,6 +88,18 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 {
   _subtitleTracks = [subtitleTracks copy];
   [self rebuild];
+}
+
+- (void)setQualityTitles:(NSArray *)qualityTitles
+{
+  _qualityTitles = [qualityTitles copy];
+  [self rebuild];
+}
+
+- (void)setSelectedQualityIndex:(NSInteger)selectedQualityIndex
+{
+  _selectedQualityIndex = selectedQualityIndex;
+  [self updateSelections];
 }
 
 - (void)setSelectedAudioIndex:(NSInteger)selectedAudioIndex
@@ -154,7 +169,28 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   [rows removeAllObjects];
   [audioButtons removeAllObjects];
   [subtitleButtons removeAllObjects];
+  [qualityButtons removeAllObjects];
   [rateChips removeAllObjects];
+
+  if (self.qualityTitles.count > 0) {
+    [self addSectionWithTitle:@"CALIDAD"];
+    for (NSUInteger index = 0; index < self.qualityTitles.count; index++) {
+      id item = self.qualityTitles[index];
+      NSString *text = [item isKindOfClass:[NSString class]] ? (NSString *)item : @"";
+      XPButton *button = [[XPButton alloc] initWithTitle:text style:XPButtonStyleGhost];
+      button.tag = (NSInteger)index;
+      [button addTarget:self
+                 action:@selector(qualityTapped:)
+       forControlEvents:UIControlEventTouchUpInside];
+      [scrollView addSubview:button];
+      XPOptionRow *row = [[XPOptionRow alloc] init];
+      row.view = button;
+      row.height = 30.0f;
+      row.kind = XPOptionRowKindOption;
+      [rows addObject:row];
+      [qualityButtons addObject:button];
+    }
+  }
 
   [self addSectionWithTitle:@"AUDIO"];
   if (self.audioTracks.count == 0) {
@@ -284,6 +320,11 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 
 - (void)updateSelections
 {
+  for (XPButton *button in qualityButtons) {
+    button.buttonStyle = (button.tag == self.selectedQualityIndex)
+      ? XPButtonStylePrimary
+      : XPButtonStyleGhost;
+  }
   for (XPButton *button in audioButtons) {
     button.buttonStyle = (button.tag == self.selectedAudioIndex)
       ? XPButtonStylePrimary
@@ -348,6 +389,14 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   XPButton *button = (XPButton *)sender;
   if (self.audioSelectionHandler != nil) {
     self.audioSelectionHandler(button.tag);
+  }
+}
+
+- (void)qualityTapped:(id)sender
+{
+  XPButton *button = (XPButton *)sender;
+  if (self.qualitySelectionHandler != nil) {
+    self.qualitySelectionHandler(button.tag);
   }
 }
 

@@ -17,6 +17,13 @@ typedef void (^XPStreamCompletion)(NSDictionary *stream, NSError *error);
                            title:(NSString *)titleName
                       completion:(XPStreamCompletion)completion;
 
+/// Direccion de video de un capitulo bajo demanda con una pista concreta.
++ (void)resolveOnDemandForTitle:(NSString *)contentId
+                        seriesId:(NSString *)seriesId
+                           title:(NSString *)titleName
+                      trackIndex:(NSInteger)trackIndex
+                      completion:(XPStreamCompletion)completion;
+
 /// Direccion de video de un canal de television en vivo.
 + (void)resolveLiveForChannel:(NSString *)channelCode
                          title:(NSString *)titleName

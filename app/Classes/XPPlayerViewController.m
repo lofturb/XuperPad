@@ -56,6 +56,12 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 @property (nonatomic, assign) BOOL optionsPanelVisible;
 @property (nonatomic, assign) float playbackRate;
 @property (nonatomic, strong) NSDate *lastInteraction;
+@property (nonatomic, copy) NSString *contentId;
+@property (nonatomic, copy) NSArray *streamTracks;
+@property (nonatomic, assign) NSInteger selectedTrackIndex;
+@property (nonatomic, copy) NSArray *displayQualityTracks;
+@property (nonatomic, assign) double pendingResumeTime;
+@property (nonatomic, assign) BOOL hasPendingResume;
 @end
 
 @implementation XPPlayerViewController
@@ -71,6 +77,10 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   controller.streamFormat = stream[@"format"];
   NSArray *backups = stream[@"backupUrls"];
   controller.backupAddresses = [backups isKindOfClass:[NSArray class]] ? backups : @[];
+  controller.contentId = stream[@"contentId"];
+  NSArray *tracks = stream[@"tracks"];
+  controller.streamTracks = [tracks isKindOfClass:[NSArray class]] ? tracks : @[];
+  controller.selectedTrackIndex = [stream[@"selectedTrackIndex"] integerValue];
   return controller;
 }
 
@@ -125,6 +135,9 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   self.optionsPanel.subtitleSelectionHandler = ^(NSInteger index) {
     [weakSelf subtitleTrackSelectedAtIndex:index];
   };
+  self.optionsPanel.qualitySelectionHandler = ^(NSInteger index) {
+    [weakSelf qualitySelectedAtIndex:index];
+  };
   self.optionsPanel.rateSelectionHandler = ^(float rate) {
     [weakSelf playbackRateSelected:rate];
   };
@@ -168,6 +181,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   self.chapterBar.currentIndex = self.currentChapterIndex;
   [self updateChapterLabels];
 
+  [self refreshQualityOptions];
   [self startPlayback];
   [self showControls];
 
@@ -440,6 +454,11 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
     self.startTimeout = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
       [self.statusView hideStatus];
+      if (self.hasPendingResume) {
+        CMTime resumeTime = CMTimeMakeWithSeconds(self.pendingResumeTime, 600);
+        [self.player seekToTime:resumeTime];
+        self.hasPendingResume = NO;
+      }
     });
   } else if (player.status == AVPlayerStatusFailed) {
     [self currentIndexDidFail];
@@ -460,6 +479,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 - (void)retryPlayback
 {
   self.currentIndex = 0;
+  self.hasPendingResume = NO;
   [self startPlayback];
 }
 
@@ -599,6 +619,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   }
   [self cancelAutomaticChapter];
   self.playbackFinished = NO;
+  self.hasPendingResume = NO;
   id item = self.chapters[index];
   if (![item isKindOfClass:[NSDictionary class]]) {
     return;
@@ -646,6 +667,120 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   self.backupAddresses = [backups isKindOfClass:[NSArray class]] ? backups : @[];
   self.addressQueue = [self buildAddressQueue];
   self.currentIndex = 0;
+  id contentId = stream[@"contentId"];
+  if ([contentId isKindOfClass:[NSString class]] && [(NSString *)contentId length] > 0) {
+    self.contentId = contentId;
+  }
+  NSArray *tracks = stream[@"tracks"];
+  self.streamTracks = [tracks isKindOfClass:[NSArray class]] ? tracks : @[];
+  self.selectedTrackIndex = [stream[@"selectedTrackIndex"] integerValue];
+  [self refreshQualityOptions];
+}
+
+- (void)refreshQualityOptions
+{
+  NSMutableArray *display = [NSMutableArray array];
+  NSArray *tracks = self.streamTracks;
+  BOOL hasCapped = NO;
+  for (id item in tracks) {
+    if (![item isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    NSInteger height = [((NSDictionary *)item)[@"height"] integerValue];
+    if (height > 0 && height <= 720) {
+      hasCapped = YES;
+      break;
+    }
+  }
+  for (id item in tracks) {
+    if (![item isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    NSDictionary *track = (NSDictionary *)item;
+    NSInteger height = [track[@"height"] integerValue];
+    if (hasCapped && height > 720) {
+      continue;
+    }
+    NSString *title = track[@"title"];
+    if (![title isKindOfClass:[NSString class]] || title.length == 0) {
+      title = @"Auto";
+    }
+    [display addObject:@{ @"index" : track[@"index"] ?: @0, @"title" : title }];
+  }
+  self.displayQualityTracks = display;
+
+  NSMutableArray *titles = [NSMutableArray array];
+  NSInteger selected = -1;
+  for (NSUInteger position = 0; position < display.count; position++) {
+    NSDictionary *entry = display[position];
+    [titles addObject:entry[@"title"]];
+    if ([entry[@"index"] integerValue] == self.selectedTrackIndex) {
+      selected = (NSInteger)position;
+    }
+  }
+  self.optionsPanel.qualityTitles = titles;
+  self.optionsPanel.selectedQualityIndex = selected;
+}
+
+- (void)qualitySelectedAtIndex:(NSInteger)index
+{
+  if (index < 0 || index >= (NSInteger)self.displayQualityTracks.count) {
+    return;
+  }
+  NSDictionary *entry = self.displayQualityTracks[(NSUInteger)index];
+  [self switchToTrackIndex:[entry[@"index"] integerValue]];
+}
+
+- (void)switchToTrackIndex:(NSInteger)trackIndex
+{
+  if (trackIndex == self.selectedTrackIndex) {
+    [self showTransientMessage:@"Esa calidad ya esta activa"];
+    return;
+  }
+  if (self.contentId.length == 0) {
+    [self showTransientMessage:@"No se puede cambiar la calidad aqui"];
+    return;
+  }
+  NSInteger previousIndex = self.selectedTrackIndex;
+  double resume = [self elapsedSeconds];
+  BOOL wasPlaying = !self.userPaused;
+  self.selectedTrackIndex = trackIndex;
+  self.pendingResumeTime = resume;
+  self.hasPendingResume = resume > 1.0;
+  [self setOptionsPanelVisible:NO];
+  [self.statusView showLoading];
+  [self showTransientMessage:@"Cambiando la calidad"];
+
+  NSString *title = self.seriesName.length > 0 ? self.seriesName : self.titleText;
+  __weak XPPlayerViewController *weakSelf = self;
+  [XPStreamResolver resolveOnDemandForTitle:self.contentId
+                                   seriesId:self.seriesId
+                                      title:title
+                                 trackIndex:trackIndex
+                                 completion:^(NSDictionary *stream, NSError *error) {
+    XPPlayerViewController *strongSelf = weakSelf;
+    if (strongSelf == nil) {
+      return;
+    }
+    if (stream == nil) {
+      strongSelf.hasPendingResume = NO;
+      strongSelf.selectedTrackIndex = previousIndex;
+      [strongSelf refreshQualityOptions];
+      [strongSelf.statusView showMessage:error.localizedDescription ?: @"No se pudo cambiar la calidad"
+                                   retry:YES];
+      return;
+    }
+    [strongSelf applyStream:stream];
+    [strongSelf startPlayback];
+    if (!wasPlaying) {
+      strongSelf.userPaused = YES;
+      if (strongSelf.decoder != nil) {
+        strongSelf.decoder.paused = YES;
+      } else if (strongSelf.player != nil) {
+        [strongSelf.player pause];
+      }
+    }
+  }];
 }
 
 - (NSString *)chapterTitleAtIndex:(NSInteger)index
@@ -922,6 +1057,10 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   [self.startTimeout invalidate];
   self.startTimeout = nil;
   [self.statusView hideStatus];
+  if (self.hasPendingResume) {
+    [self.decoder seekToTime:self.pendingResumeTime];
+    self.hasPendingResume = NO;
+  }
 }
 
 - (void)decoder:(XPDecoder *)decoder didProduceVideoFrame:(XPVideoFrameData *)frame

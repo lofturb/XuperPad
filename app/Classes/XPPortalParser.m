@@ -430,6 +430,15 @@
         track[@"size"] = entry[@"fileSize"] ?: @0;
         track[@"bitrate"] = entry[@"videoBitrate"] ?: @0;
         track[@"fps"] = entry[@"frameRate"] ?: @0;
+        NSString *trackLicense = @"";
+        NSArray *licenseList = entry[@"licenseList"];
+        if ([licenseList isKindOfClass:[NSArray class]] && licenseList.count > 0) {
+          id firstLicense = licenseList.firstObject;
+          if ([firstLicense isKindOfClass:[NSDictionary class]]) {
+            trackLicense = [self textValue:((NSDictionary *)firstLicense)[@"license"]] ?: @"";
+          }
+        }
+        track[@"license"] = trackLicense;
         [result addObject:track];
       }
     }
