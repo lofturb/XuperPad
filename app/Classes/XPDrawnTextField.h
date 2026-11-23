@@ -24,6 +24,6 @@
 @property (nonatomic, assign) UIReturnKeyType returnKeyType;
 @property (nonatomic, assign) UITextAutocapitalizationType autocapitalizationType;
 @property (nonatomic, assign) UITextAutocorrectionType autocorrectionType;
-@property (nonatomic, assign) BOOL secureTextEntry;
+@property (nonatomic, assign, getter=isSecureTextEntry) BOOL secureTextEntry;
 
 @end
