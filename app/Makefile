@@ -24,6 +24,7 @@ XuperPad_FILES = main.m \
 	Classes/XPPortalClient.m \
 	Classes/XPStreamResolver.m \
 	Classes/XPTheme.m \
+	Classes/XPStore.m \
 	Classes/XPImageCache.m \
 	Classes/XPDrawnLabel.m \
 	Classes/XPDrawnImageView.m \
