@@ -345,10 +345,29 @@ static NSString *const XPGLFragmentShader =
   double viewAspect = (double)drawableWidth / (double)drawableHeight;
   double halfWidth = 1.0;
   double halfHeight = 1.0;
-  if (videoAspect > viewAspect) {
-    halfHeight = viewAspect / videoAspect;
-  } else {
-    halfWidth = videoAspect / viewAspect;
+  switch (self.scalingMode) {
+    case XPGLScalingModeFill: {
+      if (videoAspect > viewAspect) {
+        halfWidth = videoAspect / viewAspect;
+      } else {
+        halfHeight = viewAspect / videoAspect;
+      }
+      break;
+    }
+    case XPGLScalingModeStretch: {
+      halfWidth = 1.0;
+      halfHeight = 1.0;
+      break;
+    }
+    case XPGLScalingModeFit:
+    default: {
+      if (videoAspect > viewAspect) {
+        halfHeight = viewAspect / videoAspect;
+      } else {
+        halfWidth = videoAspect / viewAspect;
+      }
+      break;
+    }
   }
   GLfloat vertices[8] = {
     (GLfloat)(-halfWidth), (GLfloat)(halfHeight),

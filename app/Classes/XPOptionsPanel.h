@@ -8,12 +8,14 @@
 @property (nonatomic, assign) NSInteger selectedAudioIndex;
 @property (nonatomic, assign) NSInteger selectedSubtitleIndex;
 @property (nonatomic, assign) NSInteger selectedQualityIndex;
+@property (nonatomic, assign) NSInteger selectedAspectIndex;
 @property (nonatomic, assign) float playbackRate;
 @property (nonatomic, copy) NSString *informationText;
 
 @property (nonatomic, copy) void (^audioSelectionHandler)(NSInteger index);
 @property (nonatomic, copy) void (^subtitleSelectionHandler)(NSInteger index);
 @property (nonatomic, copy) void (^qualitySelectionHandler)(NSInteger index);
+@property (nonatomic, copy) void (^aspectSelectionHandler)(NSInteger index);
 @property (nonatomic, copy) void (^rateSelectionHandler)(float rate);
 @property (nonatomic, copy) void (^closeHandler)(void);
 

@@ -18,6 +18,7 @@
 #import "XPTheme.h"
 #import "XPDrawnLabel.h"
 #import "XPDrawnNavigationController.h"
+#import "XPStore.h"
 
 #import <math.h>
 
@@ -98,6 +99,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 
   self.glView = [[XPGLView alloc] initWithFrame:self.view.bounds];
   self.glView.hidden = YES;
+  self.glView.scalingMode = [self scalingModeFromStore];
   [self.view addSubview:self.glView];
 
   self.statusView = [[XPStatusView alloc] initWithFrame:self.view.bounds];
@@ -142,6 +144,9 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   };
   self.optionsPanel.rateSelectionHandler = ^(float rate) {
     [weakSelf playbackRateSelected:rate];
+  };
+  self.optionsPanel.aspectSelectionHandler = ^(NSInteger index) {
+    [weakSelf applyAspectMode:(XPAspectMode)index];
   };
   self.optionsPanel.closeHandler = ^{
     [weakSelf setOptionsPanelVisible:NO];
@@ -807,6 +812,26 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   return [NSString stringWithFormat:@"Capítulo %ld", (long)(index + 1)];
 }
 
+- (XPGLScalingMode)scalingModeFromStore
+{
+  switch ([[XPStore sharedStore] aspectMode]) {
+    case XPAspectModeFill:
+      return XPGLScalingModeFill;
+    case XPAspectModeStretch:
+      return XPGLScalingModeStretch;
+    case XPAspectModeFit:
+    default:
+      return XPGLScalingModeFit;
+  }
+}
+
+- (void)applyAspectMode:(XPAspectMode)mode
+{
+  [[XPStore sharedStore] setAspectMode:mode];
+  self.glView.scalingMode = [self scalingModeFromStore];
+  self.optionsPanel.selectedAspectIndex = (NSInteger)mode;
+}
+
 - (void)updateChapterLabels
 {
   NSString *title = self.seriesName.length > 0 ? self.seriesName : self.titleText;
@@ -907,6 +932,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 {
   _optionsPanelVisible = visible;
   if (visible) {
+    self.optionsPanel.selectedAspectIndex = (NSInteger)[[XPStore sharedStore] aspectMode];
     self.optionsPanel.hidden = NO;
     [self.view bringSubviewToFront:self.optionsPanel];
     [self.view bringSubviewToFront:self.controls];

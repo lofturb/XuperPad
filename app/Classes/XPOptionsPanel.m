@@ -34,6 +34,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   NSMutableArray *subtitleButtons;
   NSMutableArray *qualityButtons;
   NSMutableArray *rateChips;
+  NSMutableArray *aspectChips;
 }
 @end
 
@@ -52,6 +53,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
     subtitleButtons = [NSMutableArray array];
     qualityButtons = [NSMutableArray array];
     rateChips = [NSMutableArray array];
+    aspectChips = [NSMutableArray array];
 
     titleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
     titleLabel.font = XPFontMedium(14.0f);
@@ -73,6 +75,7 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
     self.selectedAudioIndex = -1;
     self.selectedSubtitleIndex = -1;
     self.selectedQualityIndex = -1;
+    self.selectedAspectIndex = 0;
     self.playbackRate = 1.0f;
   }
   return self;
@@ -111,6 +114,12 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
 - (void)setSelectedSubtitleIndex:(NSInteger)selectedSubtitleIndex
 {
   _selectedSubtitleIndex = selectedSubtitleIndex;
+  [self updateSelections];
+}
+
+- (void)setSelectedAspectIndex:(NSInteger)selectedAspectIndex
+{
+  _selectedAspectIndex = selectedAspectIndex;
   [self updateSelections];
 }
 
@@ -301,6 +310,32 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   }
   chipScroll.contentSize = CGSizeMake(MAX(1.0f, offset), 34.0f);
 
+  [self addSectionWithTitle:@"ASPECTO"];
+  XPDrawnScrollView *aspectScroll = [[XPDrawnScrollView alloc] initWithFrame:CGRectZero];
+  aspectScroll.scrollsHorizontally = YES;
+  aspectScroll.scrollsVertically = NO;
+  [scrollView addSubview:aspectScroll];
+  XPOptionRow *aspectRow = [[XPOptionRow alloc] init];
+  aspectRow.view = aspectScroll;
+  aspectRow.height = 34.0f;
+  aspectRow.kind = XPOptionRowKindChips;
+  [rows addObject:aspectRow];
+
+  NSArray *aspectTitles = @[ @"Ajustar", @"Rellenar", @"Estirar" ];
+  CGFloat aspectOffset = 0.0f;
+  for (NSUInteger index = 0; index < aspectTitles.count; index++) {
+    XPChipButton *chip = [[XPChipButton alloc] initWithTitle:aspectTitles[index]];
+    chip.tag = (NSInteger)index;
+    [chip addTarget:self
+              action:@selector(aspectTapped:)
+    forControlEvents:UIControlEventTouchUpInside];
+    [aspectScroll addSubview:chip];
+    chip.frame = CGRectMake(aspectOffset, 2.0f, 76.0f, 28.0f);
+    aspectOffset += 82.0f;
+    [aspectChips addObject:chip];
+  }
+  aspectScroll.contentSize = CGSizeMake(MAX(1.0f, aspectOffset), 34.0f);
+
   [self addSectionWithTitle:@"INFORMACIÓN"];
   XPDrawnLabel *info = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   info.font = XPFontCaption(11.5f);
@@ -342,6 +377,9 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
       continue;
     }
     chip.selected = fabsf(rates[index] - self.playbackRate) < 0.01f;
+  }
+  for (XPChipButton *chip in aspectChips) {
+    chip.selected = (chip.tag == self.selectedAspectIndex);
   }
 }
 
@@ -418,6 +456,14 @@ typedef NS_ENUM(NSInteger, XPOptionRowKind) {
   }
   if (self.rateSelectionHandler != nil) {
     self.rateSelectionHandler(rates[index]);
+  }
+}
+
+- (void)aspectTapped:(id)sender
+{
+  XPChipButton *chip = (XPChipButton *)sender;
+  if (self.aspectSelectionHandler != nil) {
+    self.aspectSelectionHandler(chip.tag);
   }
 }
 
