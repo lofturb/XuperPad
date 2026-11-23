@@ -57,7 +57,6 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
 @property (nonatomic, assign) BOOL optionsPanelVisible;
 @property (nonatomic, assign) float playbackRate;
 @property (nonatomic, strong) NSDate *lastInteraction;
-@property (nonatomic, copy) NSString *contentId;
 @property (nonatomic, copy) NSArray *streamTracks;
 @property (nonatomic, assign) NSInteger selectedTrackIndex;
 @property (nonatomic, copy) NSArray *displayQualityTracks;
