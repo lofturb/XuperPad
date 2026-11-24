@@ -11,6 +11,7 @@
 #import "XPStatusView.h"
 #import "XPImageCache.h"
 #import "XPBackControl.h"
+#import "XPChipButton.h"
 #import "XPDrawnLabel.h"
 #import "XPDrawnImageView.h"
 #import "XPDrawnScrollView.h"
@@ -220,12 +221,19 @@
 @property (nonatomic, strong) XPStatusView *statusView;
 @property (nonatomic, strong) XPBackControl *backControl;
 @property (nonatomic, strong) NSMutableArray *episodeRows;
+@property (nonatomic, strong) NSArray *seasons;
+@property (nonatomic, copy) NSString *seasonIdentifier;
+@property (nonatomic, strong) XPDrawnScrollView *seasonScrollView;
+@property (nonatomic, strong) NSMutableArray *seasonChips;
 @end
 
 @interface XPDetailViewController ()
 - (NSString *)storeId;
 - (void)updateFavoriteButton;
 - (void)playEpisode:(NSDictionary *)episode resume:(double)resume;
+- (void)loadDetailForId:(NSString *)identifier;
+- (void)applySeasonChips;
+- (void)layoutSeasonChips;
 @end
 
 @implementation XPDetailViewController
@@ -237,6 +245,8 @@
     _catalogTitle = title ?: @{};
     _episodes = [NSMutableArray array];
     _episodeRows = [NSMutableArray array];
+    _seasonChips = [NSMutableArray array];
+    _seasons = @[];
   }
   return self;
 }
@@ -302,6 +312,13 @@
              forControlEvents:UIControlEventTouchUpInside];
   [self.contentView addSubview:self.playButton];
 
+  self.seasonScrollView = [[XPDrawnScrollView alloc] initWithFrame:CGRectZero];
+  self.seasonScrollView.scrollsHorizontally = YES;
+  self.seasonScrollView.scrollsVertically = NO;
+  self.seasonScrollView.backgroundColor = [UIColor clearColor];
+  self.seasonScrollView.hidden = YES;
+  [self.contentView addSubview:self.seasonScrollView];
+
   self.episodesTitleLabel = [[XPDrawnLabel alloc] initWithFrame:CGRectZero];
   self.episodesTitleLabel.font = XPFontMedium(13.0f);
   self.episodesTitleLabel.textColor = XPColorTextPrimary();
@@ -364,6 +381,12 @@
   self.playButton.frame = CGRectMake(margin, cursor, width - margin * 2.0f, 44.0f);
   cursor += 44.0f + 16.0f;
 
+  if (!self.seasonScrollView.hidden && self.seasonChips.count > 0) {
+    self.seasonScrollView.frame = CGRectMake(0, cursor, width, 34.0f);
+    [self layoutSeasonChips];
+    cursor += 34.0f + 14.0f;
+  }
+
   CGSize summarySize = [self.summaryLabel.text sizeWithAttributes:
                           @{ NSFontAttributeName : XPFontBody(12.5f) }];
   CGFloat summaryHeight = MIN(120.0f, MAX(34.0f, summarySize.height));
@@ -385,7 +408,15 @@
 
 - (void)loadDetail
 {
-  NSString *contentId = self.catalogTitle[@"id"];
+  [self loadDetailForId:self.seasonIdentifier ?: self.catalogTitle[@"id"]];
+}
+
+- (void)loadDetailForId:(NSString *)contentId
+{
+  if (contentId.length == 0) {
+    [self.statusView showMessage:@"El título no tiene identificador" retry:NO];
+    return;
+  }
   BOOL isSeries = [self.catalogTitle[@"series"] boolValue];
   [self.statusView showLoading];
 
@@ -399,14 +430,32 @@
                                   retry:YES];
       return;
     }
-    NSLog(@"[XuperPad] detalle %@ capitulos %lu",
+    NSLog(@"[XuperPad] detalle %@ capitulos %lu temporadas %lu",
           detail[@"name"] ?: contentId,
-          (unsigned long)[detail[@"episodes"] count]);
+          (unsigned long)[detail[@"episodes"] count],
+          (unsigned long)[detail[@"seasons"] count]);
     [weakSelf.statusView hideStatus];
+    weakSelf.seasonIdentifier = contentId;
+    NSMutableDictionary *title = [weakSelf.catalogTitle mutableCopy];
+    if (title == nil) {
+      title = [NSMutableDictionary dictionary];
+    }
+    title[@"id"] = contentId;
+    if ([detail[@"series"] isKindOfClass:[NSNumber class]]) {
+      title[@"series"] = detail[@"series"];
+    }
+    if ([detail[@"poster"] length] > 0) {
+      title[@"poster"] = detail[@"poster"];
+    }
+    if ([detail[@"backdrop"] length] > 0) {
+      title[@"backdrop"] = detail[@"backdrop"];
+    }
+    weakSelf.catalogTitle = title;
     weakSelf.detailInfo = detail;
     weakSelf.episodes = [detail[@"episodes"] mutableCopy] ?: [NSMutableArray array];
     [weakSelf applyDetailToInterface];
     [weakSelf buildEpisodeRows];
+    [weakSelf applySeasonChips];
     [weakSelf.view setNeedsLayout];
   }];
 }
@@ -450,7 +499,87 @@
   NSDictionary *history = [[XPStore sharedStore] historyEntryForId:[self storeId]];
   if (history != nil && [history[@"position"] doubleValue] > 1.0) {
     self.playButton.buttonTitle = @"Continuar";
+  } else {
+    self.playButton.buttonTitle = @"Reproducir";
   }
+}
+
+- (void)applySeasonChips
+{
+  for (XPChipButton *chip in self.seasonChips) {
+    [chip removeFromSuperview];
+  }
+  [self.seasonChips removeAllObjects];
+
+  NSArray *seasons = [self.detailInfo[@"seasons"] isKindOfClass:[NSArray class]]
+                         ? self.detailInfo[@"seasons"] : @[];
+  if (![self.detailInfo[@"series"] boolValue] || seasons.count < 2) {
+    self.seasons = @[];
+    self.seasonScrollView.hidden = YES;
+    [self.view setNeedsLayout];
+    return;
+  }
+
+  self.seasons = seasons;
+  for (NSUInteger index = 0; index < seasons.count; index++) {
+    id item = seasons[index];
+    if (![item isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    NSDictionary *entry = (NSDictionary *)item;
+    NSString *name = entry[@"name"];
+    if (name.length == 0) {
+      name = [NSString stringWithFormat:@"Temporada %@", entry[@"number"] ?: @(index + 1)];
+    }
+    XPChipButton *chip = [[XPChipButton alloc] initWithTitle:name];
+    chip.tag = (NSInteger)index;
+    NSString *identifier = entry[@"id"];
+    chip.selected = (identifier.length > 0 &&
+                     [identifier isEqualToString:self.seasonIdentifier]);
+    [chip addTarget:self
+                  action:@selector(seasonChipTapped:)
+        forControlEvents:UIControlEventTouchUpInside];
+    [self.seasonScrollView addSubview:chip];
+    [self.seasonChips addObject:chip];
+  }
+
+  self.seasonScrollView.hidden = self.seasonChips.count < 2;
+  [self.view setNeedsLayout];
+}
+
+- (void)layoutSeasonChips
+{
+  CGFloat x = 14.0f;
+  CGFloat height = 28.0f;
+  for (XPChipButton *chip in self.seasonChips) {
+    NSString *title = chip.chipTitle ?: @"";
+    CGSize size = [title sizeWithAttributes:@{ NSFontAttributeName : XPFontCaption(11.5f) }];
+    CGFloat chipWidth = size.width + 24.0f;
+    chip.frame = CGRectMake(x, 3.0f, chipWidth, height);
+    x += chipWidth + 8.0f;
+  }
+  self.seasonScrollView.contentSize = CGSizeMake(x + 4.0f, height + 6.0f);
+}
+
+- (void)seasonChipTapped:(XPChipButton *)sender
+{
+  NSUInteger index = (NSUInteger)sender.tag;
+  if (index >= self.seasons.count) {
+    return;
+  }
+  NSDictionary *season = self.seasons[index];
+  if (![season isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+  NSString *identifier = season[@"id"];
+  if (identifier.length == 0 || [identifier isEqualToString:self.seasonIdentifier]) {
+    return;
+  }
+  for (XPChipButton *chip in self.seasonChips) {
+    chip.selected = (chip == sender);
+  }
+  self.seasonScrollView.contentOffset = CGPointZero;
+  [self loadDetailForId:identifier];
 }
 
 - (NSString *)storeId

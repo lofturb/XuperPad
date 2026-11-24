@@ -888,7 +888,7 @@ static const NSTimeInterval XPPlayerNextChapterDelay = 4.0;
   self.controls.playing = !self.userPaused;
 
   NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-  if (now - self.lastProgressRecord >= 5.0) {
+  if (now - self.lastProgressRecord >= 10.0) {
     [self recordProgress];
   }
 

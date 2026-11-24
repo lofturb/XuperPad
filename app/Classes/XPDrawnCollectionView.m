@@ -408,9 +408,7 @@ static const CGFloat XPDrawnHeaderHeight = 26.0f;
   if (tap.state != UIGestureRecognizerStateEnded) {
     return;
   }
-  CGPoint point = [tap locationInView:self];
-  CGPoint content = CGPointMake(point.x + self.contentOffset.x,
-                                point.y + self.contentOffset.y);
+  CGPoint content = [tap locationInView:self];
   NSInteger sections = (NSInteger)self.sectionItemFrames.count;
   for (NSInteger section = 0; section < sections; section++) {
     NSArray *frames = self.sectionItemFrames[(NSUInteger)section];

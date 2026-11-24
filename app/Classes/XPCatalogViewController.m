@@ -38,6 +38,7 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
 @property (nonatomic, copy) NSString *searchText;
 @property (nonatomic, copy) NSString *searchFilter;
 @property (nonatomic, copy) NSArray *liveCategories;
+@property (nonatomic, assign) NSUInteger requestToken;
 @end
 
 @implementation XPCatalogViewController
@@ -288,10 +289,15 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   [self.collectionView reloadData];
   [self.statusView showLoading];
 
+  self.requestToken += 1;
+  NSUInteger token = self.requestToken;
   __weak XPCatalogViewController *weakSelf = self;
   [[XPPortalClient sharedClient] fetchSectionsForColumn:columnCode
                                                     page:1
                                               completion:^(NSArray *sections, NSError *error) {
+    if (token != weakSelf.requestToken) {
+      return;
+    }
     if (error != nil) {
       NSLog(@"[XuperPad] columna %@ error %@", columnCode, error.localizedDescription);
       [weakSelf.statusView showMessage:error.localizedDescription retry:YES];
@@ -342,10 +348,15 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   [self.collectionView reloadData];
   [self.statusView showLoading];
 
+  self.requestToken += 1;
+  NSUInteger token = self.requestToken;
   __weak XPCatalogViewController *weakSelf = self;
   [[XPPortalClient sharedClient] fetchLiveChannelsForColumn:columnIdentifier
                                                          page:1
                                                    completion:^(NSArray *channels, NSError *error) {
+    if (token != weakSelf.requestToken) {
+      return;
+    }
     if (error != nil) {
       [weakSelf.statusView showMessage:error.localizedDescription retry:YES];
       return;
@@ -396,10 +407,15 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   [self.collectionView reloadData];
   [self.statusView showLoading];
 
+  self.requestToken += 1;
+  NSUInteger token = self.requestToken;
   __weak XPCatalogViewController *weakSelf = self;
   [[XPPortalClient sharedClient] searchTitles:text
                                           page:1
                                     completion:^(NSArray *titles, NSError *error) {
+    if (token != weakSelf.requestToken) {
+      return;
+    }
     if (error != nil) {
       NSLog(@"[XuperPad] busqueda %@ error %@", text, error.localizedDescription);
       [weakSelf.statusView showMessage:error.localizedDescription retry:YES];
@@ -458,6 +474,7 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   }
   self.loadingMore = YES;
   NSUInteger nextPage = self.currentPage + 1;
+  NSUInteger token = self.requestToken;
 
   __weak XPCatalogViewController *weakSelf = self;
 
@@ -465,6 +482,10 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
     [[XPPortalClient sharedClient] searchTitles:self.searchText
                                            page:nextPage
                                      completion:^(NSArray *titles, NSError *error) {
+      if (token != weakSelf.requestToken) {
+        weakSelf.loadingMore = NO;
+        return;
+      }
       weakSelf.loadingMore = NO;
       if (error != nil || titles.count == 0) {
         return;
@@ -489,6 +510,10 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
     [[XPPortalClient sharedClient] fetchLiveChannelsForColumn:self.activeColumnCode
                                                           page:nextPage
                                                     completion:^(NSArray *channels, NSError *error) {
+      if (token != weakSelf.requestToken) {
+        weakSelf.loadingMore = NO;
+        return;
+      }
       weakSelf.loadingMore = NO;
       if (error != nil || channels.count == 0) {
         return;
@@ -508,6 +533,10 @@ static NSString *const XPSectionIdentifier = @"XPSectionHeader";
   [[XPPortalClient sharedClient] fetchSectionsForColumn:self.activeColumnCode
                                                     page:nextPage
                                               completion:^(NSArray *sections, NSError *error) {
+    if (token != weakSelf.requestToken) {
+      weakSelf.loadingMore = NO;
+      return;
+    }
     weakSelf.loadingMore = NO;
     if (error != nil || sections.count == 0) {
       return;
