@@ -393,6 +393,20 @@
                             @"number" : entry[@"seasonNumber"] ?: @0 }];
     }
   }
+  [seasons sortUsingComparator:^NSComparisonResult(id left, id right) {
+    NSInteger leftNumber = [((NSDictionary *)left)[@"number"] integerValue];
+    NSInteger rightNumber = [((NSDictionary *)right)[@"number"] integerValue];
+    if (leftNumber == rightNumber) {
+      return NSOrderedSame;
+    }
+    if (leftNumber <= 0) {
+      return NSOrderedDescending;
+    }
+    if (rightNumber <= 0) {
+      return NSOrderedAscending;
+    }
+    return leftNumber < rightNumber ? NSOrderedAscending : NSOrderedDescending;
+  }];
   detail[@"seasons"] = seasons;
   return detail;
 }

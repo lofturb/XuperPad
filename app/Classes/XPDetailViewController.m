@@ -527,11 +527,12 @@
       continue;
     }
     NSDictionary *entry = (NSDictionary *)item;
-    NSString *name = entry[@"name"];
-    if (name.length == 0) {
-      name = [NSString stringWithFormat:@"Temporada %@", entry[@"number"] ?: @(index + 1)];
+    NSInteger number = [entry[@"number"] integerValue];
+    if (number <= 0) {
+      number = (NSInteger)index + 1;
     }
-    XPChipButton *chip = [[XPChipButton alloc] initWithTitle:name];
+    NSString *title = [NSString stringWithFormat:@"T%ld", (long)number];
+    XPChipButton *chip = [[XPChipButton alloc] initWithTitle:title];
     chip.tag = (NSInteger)index;
     NSString *identifier = entry[@"id"];
     chip.selected = (identifier.length > 0 &&
